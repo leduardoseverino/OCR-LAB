@@ -16,13 +16,15 @@ class OCRProcessor:
                  base_url: str = "http://localhost:11434/api/generate",
                  max_workers: int = 1,
                  api_provider: str = "ollama",
-                 api_key: Optional[str] = None):
+                 api_key: Optional[str] = None,
+                 progress_callback: Optional[callable] = None):
         
         self.model_name = model_name
         self.base_url = base_url
         self.max_workers = max_workers
         self.api_provider = api_provider.lower()
         self.api_key = api_key
+        self.progress_callback = progress_callback
         
         # Validate API key for external providers
         if self.api_provider in ["openai", "gemini"] and not self.api_key:
@@ -189,7 +191,13 @@ class OCRProcessor:
             if image_path.lower().endswith('.pdf'):
                 image_pages = self._pdf_to_images(image_path)
                 responses = []
+                total_pages = len(image_pages)
+                
                 for idx, page_file in enumerate(image_pages):
+                    # Report progress for PDF pages
+                    if self.progress_callback:
+                        self.progress_callback(idx, total_pages, f"Processando página {idx + 1} de {total_pages}")
+                    
                     # Process each page with preprocessing if enabled
                     if preprocess:
                         preprocessed_path = self._preprocess_image(page_file, language)
@@ -385,9 +393,11 @@ class OCRProcessor:
 
         results = {}
         errors = {}
+        completed = 0
+        total = len(image_paths)
 
         # Process images in parallel with progress bar
-        with tqdm(total=len(image_paths), desc="Processing images") as pbar:
+        with tqdm(total=total, desc="Processing images", disable=self.progress_callback is not None) as pbar:
             with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
                 future_to_path = {
                     executor.submit(self.process_image, str(path), format_type, preprocess, custom_prompt, language): path
@@ -400,6 +410,10 @@ class OCRProcessor:
                         results[str(path)] = future.result()
                     except Exception as e:
                         errors[str(path)] = str(e)
+                    
+                    completed += 1
+                    if self.progress_callback:
+                        self.progress_callback(completed, total, f"Processando arquivo {completed} de {total}")
                     pbar.update(1)
 
         return {

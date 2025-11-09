@@ -7,6 +7,8 @@ import json
 import subprocess
 from io import BytesIO
 import requests
+import time
+from datetime import timedelta
 
 # Page configuration
 st.set_page_config(
@@ -154,9 +156,20 @@ def get_gemini_models(api_key):
         st.warning(f"Erro ao buscar modelos do Gemini: {str(e)}")
         return []
 
-def process_single_image(processor, image_path, format_type, enable_preprocessing, custom_prompt, language):
+def process_single_image(processor, image_path, format_type, enable_preprocessing, custom_prompt, language, status_text, timer_text):
     """Process a single image and return the result"""
     try:
+        start_time = time.time()
+        
+        # Create progress callback
+        def update_progress(current, total, message):
+            elapsed = time.time() - start_time
+            timer_text.metric("⏱️ Tempo Decorrido", f"{elapsed:.1f}s")
+            status_text.text(message)
+        
+        # Set progress callback
+        processor.progress_callback = update_progress
+        
         result = processor.process_image(
             image_path=image_path,
             format_type=format_type,
@@ -168,9 +181,28 @@ def process_single_image(processor, image_path, format_type, enable_preprocessin
     except Exception as e:
         return f"Error processing image: {str(e)}"
 
-def process_batch_images(processor, image_paths, format_type, enable_preprocessing, custom_prompt, language):
+def process_batch_images(processor, image_paths, format_type, enable_preprocessing, custom_prompt, language, status_text, timer_text):
     """Process multiple images and return results"""
     try:
+        start_time = time.time()
+        
+        # Create progress callback
+        def update_progress(current, total, message):
+            elapsed = time.time() - start_time
+            avg_time = elapsed / current if current > 0 else 0
+            estimated_total = avg_time * total
+            remaining = estimated_total - elapsed
+            
+            timer_text.metric(
+                "⏱️ Tempo Decorrido", 
+                f"{elapsed:.1f}s",
+                delta=f"~{remaining:.1f}s restantes" if remaining > 0 else None
+            )
+            status_text.text(message)
+        
+        # Set progress callback
+        processor.progress_callback = update_progress
+        
         results = processor.process_batch(
             input_path=image_paths,
             format_type=format_type,
@@ -381,69 +413,94 @@ def main():
                     st.error("⚠️ Prompt Personalizado é obrigatório. Por favor, insira um prompt antes de processar.")
                     st.stop()
                 
-                with st.spinner("Processing file..."):
-                    if len(image_paths) == 1:
-                        # Single image processing
-                        result = process_single_image(
-                            processor, 
-                            image_paths[0], 
-                            format_type,
-                            enable_preprocessing,
-                            custom_prompt,
-                            language
-                        )
-                        st.subheader("📝 Extracted Text")
-                        st.markdown(result)
-                        
-                        # Download button for single result
+                # Create timer and status components
+                timer_container = st.empty()
+                status_text = st.empty()
+                
+                start_time = time.time()
+                
+                if len(image_paths) == 1:
+                    # Single image processing
+                    status_text.text("Iniciando processamento...")
+                    result = process_single_image(
+                        processor, 
+                        image_paths[0], 
+                        format_type,
+                        enable_preprocessing,
+                        custom_prompt,
+                        language,
+                        status_text,
+                        timer_container
+                    )
+                    
+                    # Show final time
+                    elapsed_time = time.time() - start_time
+                    timer_container.empty()
+                    status_text.empty()
+                    
+                    st.success(f"✅ Processamento concluído em {elapsed_time:.2f}s!")
+                    st.subheader("📝 Extracted Text")
+                    st.markdown(result)
+                    
+                    # Download button for single result
+                    st.download_button(
+                        "📥 Download Result",
+                        result,
+                        file_name=f"ocr_result.{format_type}",
+                        mime="text/plain"
+                    )
+                else:
+                    # Batch processing
+                    status_text.text("Iniciando processamento em lote...")
+                    results = process_batch_images(
+                        processor,
+                        image_paths,
+                        format_type,
+                        enable_preprocessing,
+                        custom_prompt,
+                        language,
+                        status_text,
+                        timer_container
+                    )
+                    
+                    # Show final time
+                    elapsed_time = time.time() - start_time
+                    timer_container.empty()
+                    status_text.empty()
+                    
+                    st.success(f"✅ Processamento em lote concluído em {elapsed_time:.2f}s!")
+                    
+                    # Display statistics
+                    st.subheader("📊 Processing Statistics")
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("Total Images", results['statistics']['total'])
+                    with col2:
+                        st.metric("Successful", results['statistics']['successful'])
+                    with col3:
+                        st.metric("Failed", results['statistics']['failed'])
+
+                    # Display results
+                    st.subheader("📝 Extracted Text")
+                    for file_path, text in results['results'].items():
+                        with st.expander(f"Result: {os.path.basename(file_path)}"):
+                            st.markdown(text)
+
+                    # Display errors if any
+                    if results['errors']:
+                        st.error("⚠️ Some files had errors:")
+                        for file_path, error in results['errors'].items():
+                            st.warning(f"{os.path.basename(file_path)}: {error}")
+
+                    # Download all results as JSON
+                    if st.button("📥 Download All Results"):
+                        json_results = json.dumps(results, indent=2)
                         st.download_button(
-                            "📥 Download Result",
-                            result,
-                            file_name=f"ocr_result.{format_type}",
-                            mime="text/plain"
+                            "📥 Download Results JSON",
+                            json_results,
+                            file_name="ocr_results.json",
+                            mime="application/json"
                         )
-                    else:
-                        # Batch processing
-                        results = process_batch_images(
-                            processor,
-                            image_paths,
-                            format_type,
-                            enable_preprocessing,
-                            custom_prompt,
-                            language
-                        )
-                        
-                        # Display statistics
-                        st.subheader("📊 Processing Statistics")
-                        col1, col2, col3 = st.columns(3)
-                        with col1:
-                            st.metric("Total Images", results['statistics']['total'])
-                        with col2:
-                            st.metric("Successful", results['statistics']['successful'])
-                        with col3:
-                            st.metric("Failed", results['statistics']['failed'])
-
-                        # Display results
-                        st.subheader("📝 Extracted Text")
-                        for file_path, text in results['results'].items():
-                            with st.expander(f"Result: {os.path.basename(file_path)}"):
-                                st.markdown(text)
-
-                        # Display errors if any
-                        if results['errors']:
-                            st.error("⚠️ Some files had errors:")
-                            for file_path, error in results['errors'].items():
-                                st.warning(f"{os.path.basename(file_path)}: {error}")
-
-                        # Download all results as JSON
-                        if st.button("📥 Download All Results"):
-                            json_results = json.dumps(results, indent=2)
-                            st.download_button(
-                                "📥 Download Results JSON",
-                                json_results,
-                                file_name="ocr_results.json",
-                                mime="application/json"
-                            )
 
 if __name__ == "__main__":
     main()
