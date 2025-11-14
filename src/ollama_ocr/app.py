@@ -8,8 +8,10 @@ import subprocess
 from io import BytesIO
 import requests
 import time
-from datetime import timedelta
+from datetime import timedelta, datetime
 from docx import Document
+from docx.shared import Pt, RGBColor, Inches
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 
 # Page configuration
 st.set_page_config(
@@ -214,6 +216,101 @@ def process_batch_images(processor, image_paths, format_type, enable_preprocessi
         return results
     except Exception as e:
         return {"error": str(e)}
+
+def create_structured_docx(title, content_dict, model_name, format_type, language, elapsed_time=None, is_batch=False):
+    """Create a structured DOCX document with professional formatting"""
+    doc = Document()
+    
+    # Title
+    title_para = doc.add_heading(title, 0)
+    title_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    
+    # Add metadata section
+    doc.add_heading('Informações do Processamento', level=1)
+    
+    # Create metadata table
+    metadata_table = doc.add_table(rows=5 if elapsed_time else 4, cols=2)
+    metadata_table.style = 'Light Grid Accent 1'
+    
+    # Fill metadata
+    row_idx = 0
+    cells = metadata_table.rows[row_idx].cells
+    cells[0].text = 'Data e Hora'
+    cells[1].text = datetime.now().strftime('%d/%m/%Y %H:%M:%S')
+    
+    row_idx += 1
+    cells = metadata_table.rows[row_idx].cells
+    cells[0].text = 'Modelo Utilizado'
+    cells[1].text = model_name
+    
+    row_idx += 1
+    cells = metadata_table.rows[row_idx].cells
+    cells[0].text = 'Formato de Saída'
+    cells[1].text = format_type
+    
+    row_idx += 1
+    cells = metadata_table.rows[row_idx].cells
+    cells[0].text = 'Idioma'
+    cells[1].text = language
+    
+    if elapsed_time:
+        row_idx += 1
+        cells = metadata_table.rows[row_idx].cells
+        cells[0].text = 'Tempo de Processamento'
+        cells[1].text = f'{elapsed_time:.2f} segundos'
+    
+    # Add spacing
+    doc.add_paragraph()
+    
+    # Add results section
+    doc.add_heading('Resultados Extraídos', level=1)
+    
+    if is_batch:
+        # For batch processing, iterate through multiple results
+        for idx, (file_name, text) in enumerate(content_dict.items(), 1):
+            # Add file header
+            doc.add_heading(f'{idx}. {file_name}', level=2)
+            
+            # Add separator line
+            p = doc.add_paragraph()
+            p.add_run('─' * 80)
+            run = p.runs[0]
+            run.font.color.rgb = RGBColor(200, 200, 200)
+            
+            # Add content with formatting
+            content_para = doc.add_paragraph()
+            run = content_para.add_run(text)
+            run.font.size = Pt(11)
+            run.font.name = 'Calibri'
+            
+            # Add spacing between files
+            doc.add_paragraph()
+    else:
+        # For single file processing
+        # Add separator line
+        p = doc.add_paragraph()
+        p.add_run('─' * 80)
+        run = p.runs[0]
+        run.font.color.rgb = RGBColor(200, 200, 200)
+        
+        # Add content with formatting
+        content_para = doc.add_paragraph()
+        run = content_para.add_run(content_dict)
+        run.font.size = Pt(11)
+        run.font.name = 'Calibri'
+    
+    # Add footer
+    doc.add_page_break()
+    footer_section = doc.sections[0]
+    footer = footer_section.footer
+    footer_para = footer.paragraphs[0]
+    footer_para.text = f'Gerado por OCR Vision – Skyone LAB | {datetime.now().strftime("%d/%m/%Y %H:%M")}'
+    footer_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run = footer_para.runs[0]
+    run.font.size = Pt(9)
+    run.font.color.rgb = RGBColor(128, 128, 128)
+    
+    return doc
 
 def main():
     st.title("OCR Vision – Skyone LAB")
@@ -454,9 +551,16 @@ def main():
                             mime="text/plain"
                         )
                     with col2:
-                        # Create DOCX
-                        doc = Document()
-                        doc.add_paragraph(result)
+                        # Create structured DOCX
+                        doc = create_structured_docx(
+                            title='Resultado do OCR',
+                            content_dict=result,
+                            model_name=selected_model,
+                            format_type=format_type,
+                            language=language,
+                            elapsed_time=elapsed_time,
+                            is_batch=False
+                        )
                         docx_buffer = BytesIO()
                         doc.save(docx_buffer)
                         docx_buffer.seek(0)
@@ -467,9 +571,16 @@ def main():
                             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                         )
                     with col3:
-                        # DOC format (using DOCX extension as python-docx generates .docx)
-                        doc = Document()
-                        doc.add_paragraph(result)
+                        # DOC format with structured content
+                        doc = create_structured_docx(
+                            title='Resultado do OCR',
+                            content_dict=result,
+                            model_name=selected_model,
+                            format_type=format_type,
+                            language=language,
+                            elapsed_time=elapsed_time,
+                            is_batch=False
+                        )
                         doc_buffer = BytesIO()
                         doc.save(doc_buffer)
                         doc_buffer.seek(0)
@@ -537,13 +648,17 @@ def main():
                         )
                     
                     with col2:
-                        # DOCX format - combine all results
-                        doc = Document()
-                        doc.add_heading('OCR Results', 0)
-                        for file_path, text in results['results'].items():
-                            doc.add_heading(os.path.basename(file_path), level=1)
-                            doc.add_paragraph(text)
-                            doc.add_paragraph()  # Add spacing
+                        # DOCX format - structured batch results
+                        batch_content = {os.path.basename(fp): text for fp, text in results['results'].items()}
+                        doc = create_structured_docx(
+                            title='Resultados do OCR (Lote)',
+                            content_dict=batch_content,
+                            model_name=selected_model,
+                            format_type=format_type,
+                            language=language,
+                            elapsed_time=elapsed_time,
+                            is_batch=True
+                        )
                         docx_buffer = BytesIO()
                         doc.save(docx_buffer)
                         docx_buffer.seek(0)
@@ -555,13 +670,17 @@ def main():
                         )
                     
                     with col3:
-                        # DOC format (using DOCX extension as python-docx generates .docx)
-                        doc = Document()
-                        doc.add_heading('OCR Results', 0)
-                        for file_path, text in results['results'].items():
-                            doc.add_heading(os.path.basename(file_path), level=1)
-                            doc.add_paragraph(text)
-                            doc.add_paragraph()  # Add spacing
+                        # DOC format - structured batch results
+                        batch_content = {os.path.basename(fp): text for fp, text in results['results'].items()}
+                        doc = create_structured_docx(
+                            title='Resultados do OCR (Lote)',
+                            content_dict=batch_content,
+                            model_name=selected_model,
+                            format_type=format_type,
+                            language=language,
+                            elapsed_time=elapsed_time,
+                            is_batch=True
+                        )
                         doc_buffer = BytesIO()
                         doc.save(doc_buffer)
                         doc_buffer.seek(0)
