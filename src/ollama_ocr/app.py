@@ -9,6 +9,7 @@ from io import BytesIO
 import requests
 import time
 from datetime import timedelta
+from docx import Document
 
 # Page configuration
 st.set_page_config(
@@ -235,7 +236,7 @@ def main():
         # API Provider Selection
         api_provider = st.selectbox(
             "🔌 Provedor de API",
-            ["Ollama (Local)", "OpenAI", "Google Gemini"],
+            ["Google Gemini", "Ollama (Local)", "OpenAI"],
             help="Escolha o provedor de API de visão"
         )
         
@@ -297,7 +298,8 @@ def main():
             "📝 Prompt Personalizado *",
             value="",
             placeholder="Digite seu prompt aqui (obrigatório)",
-            help="Insira um prompt personalizado para extração de texto. Este campo é obrigatório."
+            help="Insira um prompt personalizado para extração de texto. Este campo é obrigatório.",
+            height=200
         )
 
         language = st.text_input(
@@ -442,13 +444,41 @@ def main():
                     st.subheader("📝 Extracted Text")
                     st.markdown(result)
                     
-                    # Download button for single result
-                    st.download_button(
-                        "📥 Download Result",
-                        result,
-                        file_name=f"ocr_result.{format_type}",
-                        mime="text/plain"
-                    )
+                    # Download buttons for single result
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.download_button(
+                            "📥 Download TXT",
+                            result,
+                            file_name=f"ocr_result.txt",
+                            mime="text/plain"
+                        )
+                    with col2:
+                        # Create DOCX
+                        doc = Document()
+                        doc.add_paragraph(result)
+                        docx_buffer = BytesIO()
+                        doc.save(docx_buffer)
+                        docx_buffer.seek(0)
+                        st.download_button(
+                            "📥 Download DOCX",
+                            docx_buffer.getvalue(),
+                            file_name="ocr_result.docx",
+                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                        )
+                    with col3:
+                        # DOC format (using DOCX extension as python-docx generates .docx)
+                        doc = Document()
+                        doc.add_paragraph(result)
+                        doc_buffer = BytesIO()
+                        doc.save(doc_buffer)
+                        doc_buffer.seek(0)
+                        st.download_button(
+                            "📥 Download DOC",
+                            doc_buffer.getvalue(),
+                            file_name="ocr_result.doc",
+                            mime="application/msword"
+                        )
                 else:
                     # Batch processing
                     status_text.text("Iniciando processamento em lote...")
@@ -492,14 +522,54 @@ def main():
                         for file_path, error in results['errors'].items():
                             st.warning(f"{os.path.basename(file_path)}: {error}")
 
-                    # Download all results as JSON
-                    if st.button("📥 Download All Results"):
+                    # Download all results in different formats
+                    st.subheader("📥 Download Options")
+                    col1, col2, col3 = st.columns(3)
+                    
+                    with col1:
+                        # JSON format
                         json_results = json.dumps(results, indent=2)
                         st.download_button(
-                            "📥 Download Results JSON",
+                            "📥 Download JSON",
                             json_results,
                             file_name="ocr_results.json",
                             mime="application/json"
+                        )
+                    
+                    with col2:
+                        # DOCX format - combine all results
+                        doc = Document()
+                        doc.add_heading('OCR Results', 0)
+                        for file_path, text in results['results'].items():
+                            doc.add_heading(os.path.basename(file_path), level=1)
+                            doc.add_paragraph(text)
+                            doc.add_paragraph()  # Add spacing
+                        docx_buffer = BytesIO()
+                        doc.save(docx_buffer)
+                        docx_buffer.seek(0)
+                        st.download_button(
+                            "📥 Download DOCX",
+                            docx_buffer.getvalue(),
+                            file_name="ocr_results.docx",
+                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                        )
+                    
+                    with col3:
+                        # DOC format (using DOCX extension as python-docx generates .docx)
+                        doc = Document()
+                        doc.add_heading('OCR Results', 0)
+                        for file_path, text in results['results'].items():
+                            doc.add_heading(os.path.basename(file_path), level=1)
+                            doc.add_paragraph(text)
+                            doc.add_paragraph()  # Add spacing
+                        doc_buffer = BytesIO()
+                        doc.save(doc_buffer)
+                        doc_buffer.seek(0)
+                        st.download_button(
+                            "📥 Download DOC",
+                            doc_buffer.getvalue(),
+                            file_name="ocr_results.doc",
+                            mime="application/msword"
                         )
 
 if __name__ == "__main__":
