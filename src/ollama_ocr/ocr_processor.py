@@ -10,8 +10,31 @@ import cv2
 import pymupdf 
 import numpy as np
 from threading import Lock
+import tiktoken
 
 class OCRProcessor:
+    # Preços por 1M tokens (input/output) - atualizados conforme a API
+    PRICING = {
+        "openai": {
+            "gpt-4o": {"input": 2.50, "output": 10.00},
+            "gpt-4o-mini": {"input": 0.150, "output": 0.600},
+            "gpt-4-turbo": {"input": 10.00, "output": 30.00},
+            "gpt-4": {"input": 30.00, "output": 60.00},
+            "gpt-3.5-turbo": {"input": 0.50, "output": 1.50},
+        },
+        "gemini": {
+            "gemini-1.5-pro": {"input": 1.25, "output": 5.00},
+            "gemini-1.5-flash": {"input": 0.075, "output": 0.30},
+            "gemini-2.0-flash-exp": {"input": 0.00, "output": 0.00},
+        },
+        "ollama": {
+            "default": {"input": 0.00, "output": 0.00}  # Ollama é local e gratuito
+        }
+    }
+    
+    # Taxa de câmbio USD para BRL (atualizar conforme necessário)
+    USD_TO_BRL = 6.10
+    
     def __init__(self, model_name: str = "llama3.2-vision:11b", 
                  base_url: str = "http://localhost:11434/api/generate",
                  max_workers: int = 1,
@@ -26,16 +49,110 @@ class OCRProcessor:
         self.api_key = api_key
         self.progress_callback = progress_callback
         
+        # Token tracking
+        self.total_input_tokens = 0
+        self.total_output_tokens = 0
+        self.total_cost = 0.0
+        
+        # Initialize tokenizer for OpenAI models
+        if self.api_provider == "openai":
+            try:
+                self.tokenizer = tiktoken.encoding_for_model(self.model_name)
+            except:
+                self.tokenizer = tiktoken.get_encoding("cl100k_base")
+        else:
+            self.tokenizer = None
+        
         # Validate API key for external providers
         if self.api_provider in ["openai", "gemini"] and not self.api_key:
             raise ValueError(f"API key is required for {self.api_provider}")
+    
+    def _estimate_tokens(self, text: str) -> int:
+        """Estimate token count for text"""
+        if self.tokenizer:
+            return len(self.tokenizer.encode(text))
+        else:
+            # Aproximação: ~4 caracteres por token
+            return len(text) // 4
+    
+    def _estimate_image_tokens(self, image_path: str) -> int:
+        """Estimate token count for image based on resolution"""
+        try:
+            import cv2
+            img = cv2.imread(image_path)
+            if img is None:
+                return 0
+            height, width = img.shape[:2]
+            
+            # OpenAI vision pricing model
+            # Base tokens + tiles based on image size
+            if self.api_provider == "openai":
+                # Images are resized to fit within 2048x2048
+                # Each 512x512 tile costs ~170 tokens
+                tiles = ((width // 512) + 1) * ((height // 512) + 1)
+                return 85 + (tiles * 170)
+            elif self.api_provider == "gemini":
+                # Gemini charges ~258 tokens per image
+                return 258
+            else:
+                # Ollama local - estimate based on image size
+                return (width * height) // 1000
+        except:
+            return 500  # Default estimate
+    
+    def _calculate_cost(self, input_tokens: int, output_tokens: int) -> float:
+        """Calculate cost based on tokens and model pricing"""
+        if self.api_provider == "ollama":
+            return 0.0
+        
+        pricing = None
+        if self.api_provider == "openai":
+            # Find matching pricing
+            for model_key in self.PRICING["openai"]:
+                if model_key in self.model_name:
+                    pricing = self.PRICING["openai"][model_key]
+                    break
+            if not pricing:
+                pricing = self.PRICING["openai"]["gpt-4o"]  # Default
+        elif self.api_provider == "gemini":
+            for model_key in self.PRICING["gemini"]:
+                if model_key in self.model_name:
+                    pricing = self.PRICING["gemini"][model_key]
+                    break
+            if not pricing:
+                pricing = self.PRICING["gemini"]["gemini-1.5-flash"]  # Default
+        
+        if pricing:
+            input_cost = (input_tokens / 1_000_000) * pricing["input"]
+            output_cost = (output_tokens / 1_000_000) * pricing["output"]
+            return input_cost + output_cost
+        return 0.0
+    
+    def get_usage_stats(self) -> Dict[str, Any]:
+        """Get current usage statistics"""
+        return {
+            "input_tokens": self.total_input_tokens,
+            "output_tokens": self.total_output_tokens,
+            "total_tokens": self.total_input_tokens + self.total_output_tokens,
+            "estimated_cost_usd": self.total_cost,
+            "estimated_cost_brl": self.total_cost * self.USD_TO_BRL,
+            "usd_to_brl_rate": self.USD_TO_BRL,
+            "model": self.model_name,
+            "provider": self.api_provider
+        }
+    
+    def reset_usage_stats(self):
+        """Reset usage statistics"""
+        self.total_input_tokens = 0
+        self.total_output_tokens = 0
+        self.total_cost = 0.0
 
     def _encode_image(self, image_path: str) -> str:
         """Convert image to base64 string"""
         with open(image_path, "rb") as image_file:
             return base64.b64encode(image_file.read()).decode("utf-8")
     
-    def _call_openai_vision(self, image_base64: str, prompt: str) -> str:
+    def _call_openai_vision(self, image_base64: str, prompt: str, image_path: str = None) -> str:
         """Call OpenAI Vision API"""
         headers = {
             "Content-Type": "application/json",
@@ -67,9 +184,20 @@ class OCRProcessor:
             json=payload
         )
         response.raise_for_status()
-        return response.json()["choices"][0]["message"]["content"]
+        result = response.json()
+        
+        # Track tokens
+        usage = result.get("usage", {})
+        input_tokens = usage.get("prompt_tokens", 0)
+        output_tokens = usage.get("completion_tokens", 0)
+        
+        self.total_input_tokens += input_tokens
+        self.total_output_tokens += output_tokens
+        self.total_cost += self._calculate_cost(input_tokens, output_tokens)
+        
+        return result["choices"][0]["message"]["content"]
     
-    def _call_gemini_vision(self, image_base64: str, prompt: str) -> str:
+    def _call_gemini_vision(self, image_base64: str, prompt: str, image_path: str = None) -> str:
         """Call Google Gemini Vision API"""
         headers = {
             "Content-Type": "application/json"
@@ -94,15 +222,41 @@ class OCRProcessor:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model_name}:generateContent?key={self.api_key}"
         response = requests.post(url, headers=headers, json=payload)
         response.raise_for_status()
-        return response.json()["candidates"][0]["content"]["parts"][0]["text"]
+        result = response.json()
+        
+        # Track tokens (Gemini provides usage metadata)
+        usage = result.get("usageMetadata", {})
+        input_tokens = usage.get("promptTokenCount", 0)
+        output_tokens = usage.get("candidatesTokenCount", 0)
+        
+        # If tokens not provided, estimate them
+        if input_tokens == 0:
+            input_tokens = self._estimate_tokens(prompt)
+            if image_path:
+                input_tokens += self._estimate_image_tokens(image_path)
+        
+        response_text = result["candidates"][0]["content"]["parts"][0]["text"]
+        if output_tokens == 0:
+            output_tokens = self._estimate_tokens(response_text)
+        
+        self.total_input_tokens += input_tokens
+        self.total_output_tokens += output_tokens
+        self.total_cost += self._calculate_cost(input_tokens, output_tokens)
+        
+        return response_text
     
-    def _call_vision_api(self, image_base64: str, prompt: str) -> str:
+    def _call_vision_api(self, image_base64: str, prompt: str, image_path: str = None) -> str:
         """Route to appropriate vision API based on provider"""
         if self.api_provider == "openai":
-            return self._call_openai_vision(image_base64, prompt)
+            return self._call_openai_vision(image_base64, prompt, image_path)
         elif self.api_provider == "gemini":
-            return self._call_gemini_vision(image_base64, prompt)
+            return self._call_gemini_vision(image_base64, prompt, image_path)
         else:  # ollama
+            # Estimate tokens for Ollama (no cost, but still track usage)
+            input_tokens = self._estimate_tokens(prompt)
+            if image_path:
+                input_tokens += self._estimate_image_tokens(image_path)
+            
             payload = {
                 "model": self.model_name,
                 "prompt": prompt,
@@ -111,7 +265,15 @@ class OCRProcessor:
             }
             response = requests.post(self.base_url, json=payload)
             response.raise_for_status()
-            return response.json().get("response", "")
+            result_text = response.json().get("response", "")
+            
+            output_tokens = self._estimate_tokens(result_text)
+            
+            self.total_input_tokens += input_tokens
+            self.total_output_tokens += output_tokens
+            # Ollama is free
+            
+            return result_text
 
     def _pdf_to_images(self, pdf_path: str) -> List[str]:
         """
@@ -261,7 +423,7 @@ class OCRProcessor:
                         prompt = prompts.get(format_type, prompts["text"])
 
                     # Make the API call
-                    res = self._call_vision_api(image_base64, prompt)
+                    res = self._call_vision_api(image_base64, prompt, preprocessed_path)
                     # Prefix result with page number
                     responses.append(f"Page {idx + 1}:\n{res}")
 
@@ -281,14 +443,11 @@ class OCRProcessor:
                 return final_result
 
             # Process non-PDF images as before.
+            processed_path = image_path
             if preprocess:
-                image_path = self._preprocess_image(image_path, language)
+                processed_path = self._preprocess_image(image_path, language)
 
-            image_base64 = self._encode_image(image_path)
-
-            # Clean up temporary files
-            if image_path.endswith(('_preprocessed.jpg', '_temp.jpg')):
-                os.remove(image_path)
+            image_base64 = self._encode_image(processed_path)
 
             if custom_prompt and custom_prompt.strip():
                 prompt = custom_prompt
@@ -342,7 +501,11 @@ class OCRProcessor:
                 }
                 prompt = prompts.get(format_type, prompts["text"])
 
-            result = self._call_vision_api(image_base64, prompt)
+            result = self._call_vision_api(image_base64, prompt, processed_path)
+            
+            # Clean up temporary files
+            if processed_path.endswith(('_preprocessed.jpg', '_temp.jpg')):
+                os.remove(processed_path)
 
             if format_type == "json":
                 try:

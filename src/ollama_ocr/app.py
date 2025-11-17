@@ -429,6 +429,11 @@ def main():
         elif selected_model == "moondream":
             st.info("Moondream: Modelo leve projetado para dispositivos de borda")
         
+        # Exchange rate info
+        st.divider()
+        st.caption("💱 Taxa de Câmbio: USD 1.00 = R$ 6.10")
+        st.caption("📊 Custos calculados automaticamente para cada processamento")
+        
     
     # Validate that custom prompt is provided
     custom_prompt = custom_prompt_input.strip() if custom_prompt_input.strip() != "" else None
@@ -512,6 +517,9 @@ def main():
                     st.error("⚠️ Prompt Personalizado é obrigatório. Por favor, insira um prompt antes de processar.")
                     st.stop()
                 
+                # Reset usage stats before processing
+                processor.reset_usage_stats()
+                
                 # Create timer and status components
                 timer_container = st.empty()
                 status_text = st.empty()
@@ -537,7 +545,31 @@ def main():
                     timer_container.empty()
                     status_text.empty()
                     
+                    # Get usage statistics
+                    usage_stats = processor.get_usage_stats()
+                    
                     st.success(f"✅ Processamento concluído em {elapsed_time:.2f}s!")
+                    
+                    # Display usage statistics
+                    st.subheader("📊 Estatísticas de Uso")
+                    col1, col2, col3, col4, col5 = st.columns(5)
+                    with col1:
+                        st.metric("⏱️ Tempo", f"{elapsed_time:.2f}s")
+                    with col2:
+                        st.metric("📥 Tokens Entrada", f"{usage_stats['input_tokens']:,}")
+                    with col3:
+                        st.metric("📤 Tokens Saída", f"{usage_stats['output_tokens']:,}")
+                    with col4:
+                        if usage_stats['estimated_cost_brl'] > 0:
+                            st.metric("💰 Custo (BRL)", f"R$ {usage_stats['estimated_cost_brl']:.4f}")
+                        else:
+                            st.metric("💰 Custo", "Gratuito")
+                    with col5:
+                        if usage_stats['estimated_cost_usd'] > 0:
+                            st.metric("💵 Custo (USD)", f"${usage_stats['estimated_cost_usd']:.4f}")
+                        else:
+                            st.metric("💵 USD", "-")
+                    
                     st.subheader("📝 Extracted Text")
                     st.markdown(result)
                     
@@ -609,17 +641,40 @@ def main():
                     timer_container.empty()
                     status_text.empty()
                     
+                    # Get usage statistics
+                    usage_stats = processor.get_usage_stats()
+                    
                     st.success(f"✅ Processamento em lote concluído em {elapsed_time:.2f}s!")
                     
-                    # Display statistics
-                    st.subheader("📊 Processing Statistics")
+                    # Display processing statistics
+                    st.subheader("📊 Estatísticas de Processamento")
                     col1, col2, col3 = st.columns(3)
                     with col1:
-                        st.metric("Total Images", results['statistics']['total'])
+                        st.metric("Total de Imagens", results['statistics']['total'])
                     with col2:
-                        st.metric("Successful", results['statistics']['successful'])
+                        st.metric("Sucesso", results['statistics']['successful'])
                     with col3:
-                        st.metric("Failed", results['statistics']['failed'])
+                        st.metric("Falhas", results['statistics']['failed'])
+                    
+                    # Display usage statistics
+                    st.subheader("💡 Estatísticas de Uso")
+                    col1, col2, col3, col4, col5 = st.columns(5)
+                    with col1:
+                        st.metric("⏱️ Tempo Total", f"{elapsed_time:.2f}s")
+                    with col2:
+                        st.metric("📥 Tokens Entrada", f"{usage_stats['input_tokens']:,}")
+                    with col3:
+                        st.metric("📤 Tokens Saída", f"{usage_stats['output_tokens']:,}")
+                    with col4:
+                        if usage_stats['estimated_cost_brl'] > 0:
+                            st.metric("💰 Custo (BRL)", f"R$ {usage_stats['estimated_cost_brl']:.4f}")
+                        else:
+                            st.metric("💰 Custo", "Gratuito")
+                    with col5:
+                        if usage_stats['estimated_cost_usd'] > 0:
+                            st.metric("💵 Custo (USD)", f"${usage_stats['estimated_cost_usd']:.4f}")
+                        else:
+                            st.metric("💵 USD", "-")
 
                     # Display results
                     st.subheader("📝 Extracted Text")
