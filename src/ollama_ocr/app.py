@@ -576,7 +576,13 @@ def main():
                         st.markdown('</div>', unsafe_allow_html=True)
                     
                     # Get raw result
-                    raw_result = processor.get_raw_result() or result
+                    try:
+                        if hasattr(processor, 'get_raw_result'):
+                            raw_result = processor.get_raw_result() or result
+                        else:
+                            raw_result = result
+                    except (AttributeError, Exception):
+                        raw_result = result
                     
                     # Display results in the selected format in a separate block
                     st.subheader(f"📝 Resultado Processado ({format_type.upper()})")
@@ -780,7 +786,13 @@ def main():
                         st.warning("⚠️ Nenhum resultado foi gerado.")
 
                     # Get raw results
-                    raw_results_dict = processor.get_raw_results()
+                    try:
+                        if hasattr(processor, 'get_raw_results'):
+                            raw_results_dict = processor.get_raw_results()
+                        else:
+                            raw_results_dict = {}
+                    except (AttributeError, Exception):
+                        raw_results_dict = {}
                     
                     # Download all results in different formats in a separate block
                     st.subheader("📥 Opções de Download")
