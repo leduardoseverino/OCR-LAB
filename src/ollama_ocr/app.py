@@ -173,6 +173,7 @@ def process_single_image(processor, image_path, format_type, enable_preprocessin
         # Set progress callback
         processor.progress_callback = update_progress
         
+        # Process the image
         result = processor.process_image(
             image_path=image_path,
             format_type=format_type,
@@ -180,6 +181,7 @@ def process_single_image(processor, image_path, format_type, enable_preprocessin
             custom_prompt=custom_prompt,
             language=language
         )
+        
         return result
     except Exception as e:
         return f"Error processing image: {str(e)}"
@@ -213,6 +215,7 @@ def process_batch_images(processor, image_paths, format_type, enable_preprocessi
             custom_prompt=custom_prompt,
             language=language
         )
+        
         return results
     except Exception as e:
         return {"error": str(e)}
@@ -457,44 +460,21 @@ def main():
         st.error(f"⚠️ Configuration Error: {str(e)}")
         st.stop()
 
-    # Two-column layout: Upload | Preview
-    col_upload, col_preview = st.columns([1, 1])
-    
-    with col_upload:
-        with st.container(border=True):
-            st.subheader("📤 Upload de Arquivos")
-            uploaded_files = st.file_uploader(
-                "Arraste seus arquivos aqui",
-                type=['png', 'jpg', 'jpeg', 'tiff', 'bmp', 'pdf'],
-                accept_multiple_files=True,
-                help="Formatos suportados: PNG, JPG, JPEG, TIFF, BMP, PDF"
-            )
-    
-    with col_preview:
-        with st.container(border=True):
-            st.subheader("👁️ Visualização")
-            if uploaded_files:
-                st.caption(f"{len(uploaded_files)} arquivo(s) carregado(s)")
-                for uploaded_file in uploaded_files:
-                    try:
-                        if uploaded_file.name.lower().endswith('.pdf'):
-                            # Show PDF icon and info
-                            st.markdown(f"""
-                            <div style='text-align: center; padding: 2rem; border: 2px dashed #E0E0E0; border-radius: 8px;'>
-                                <div style='font-size: 48px; margin-bottom: 1rem;'>📄</div>
-                                <div style='font-size: 14px; color: #666;'>{uploaded_file.name}</div>
-                                <div style='font-size: 12px; color: #999; margin-top: 0.5rem;'>Arquivo PDF</div>
-                            </div>
-                            """, unsafe_allow_html=True)
-                        else:
-                            # Reset file pointer to beginning before displaying
-                            uploaded_file.seek(0)
-                            image = Image.open(uploaded_file)
-                            st.image(image, caption=uploaded_file.name, use_container_width=True)
-                    except Exception as e:
-                        st.error(f"Erro ao exibir {uploaded_file.name}: {e}")
-            else:
-                st.info("Nenhum arquivo carregado ainda.")
+    # Upload container
+    with st.container(border=True):
+        st.subheader("📤 Upload de Arquivos")
+        uploaded_files = st.file_uploader(
+            "Arraste seus arquivos aqui",
+            type=['png', 'jpg', 'jpeg', 'tiff', 'bmp', 'pdf'],
+            accept_multiple_files=True,
+            help="Formatos suportados: PNG, JPG, JPEG, TIFF, BMP, PDF"
+        )
+        
+        # Botão de processar dentro do box de upload
+        if uploaded_files:
+            st.divider()
+            if st.button("🚀 Processar Arquivo", key="process_button", use_container_width=True):
+                st.session_state['process_clicked'] = True
 
     if uploaded_files:
         # Create a temporary directory for uploaded files
@@ -510,15 +490,26 @@ def main():
                     f.write(uploaded_file.read())
                 image_paths.append(temp_path)
 
-            # Process button
-            if st.button("🚀 Processar Arquivo"):
+            # Process button (verifica se foi clicado via session_state)
+            if st.session_state.get('process_clicked', False):
+                # Reset flag
+                st.session_state['process_clicked'] = False
                 # Validate custom prompt
                 if not custom_prompt:
                     st.error("⚠️ Prompt Personalizado é obrigatório. Por favor, insira um prompt antes de processar.")
                     st.stop()
                 
+                # Show number of files being processed
+                if len(image_paths) > 1:
+                    st.info(f"📂 Processando {len(image_paths)} arquivos em modo lote...")
+                else:
+                    st.info(f"📄 Processando 1 arquivo...")
+                
                 # Reset usage stats before processing
-                processor.reset_usage_stats()
+                try:
+                    processor.reset_usage_stats()
+                except Exception as e:
+                    st.warning(f"Aviso ao resetar estatísticas: {e}")
                 
                 # Create timer and status components
                 timer_container = st.empty()
@@ -546,95 +537,153 @@ def main():
                     status_text.empty()
                     
                     # Get usage statistics
-                    usage_stats = processor.get_usage_stats()
+                    try:
+                        usage_stats = processor.get_usage_stats()
+                    except Exception as e:
+                        st.warning(f"Aviso ao obter estatísticas: {e}")
+                        usage_stats = {
+                            'input_tokens': 0,
+                            'output_tokens': 0,
+                            'estimated_cost_brl': 0,
+                            'estimated_cost_usd': 0
+                        }
                     
                     st.success(f"✅ Processamento concluído em {elapsed_time:.2f}s!")
                     
-                    # Display usage statistics
-                    st.subheader("📊 Estatísticas de Uso")
-                    col1, col2, col3, col4, col5 = st.columns(5)
-                    with col1:
-                        st.metric("⏱️ Tempo", f"{elapsed_time:.2f}s")
-                    with col2:
-                        st.metric("📥 Tokens Entrada", f"{usage_stats['input_tokens']:,}")
-                    with col3:
-                        st.metric("📤 Tokens Saída", f"{usage_stats['output_tokens']:,}")
-                    with col4:
-                        if usage_stats['estimated_cost_brl'] > 0:
-                            st.metric("💰 Custo (BRL)", f"R$ {usage_stats['estimated_cost_brl']:.4f}")
-                        else:
-                            st.metric("💰 Custo", "Gratuito")
-                    with col5:
-                        if usage_stats['estimated_cost_usd'] > 0:
-                            st.metric("💵 Custo (USD)", f"${usage_stats['estimated_cost_usd']:.4f}")
-                        else:
-                            st.metric("💵 USD", "-")
+                    # Display usage statistics in a separate block
+                    with st.container(border=True):
+                        st.subheader("📊 Estatísticas de Uso")
+                        st.markdown('<div style="font-size: 11pt;">', unsafe_allow_html=True)
+                        col1, col2, col3, col4, col5 = st.columns(5)
+                        with col1:
+                            st.metric("⏱️ Tempo", f"{elapsed_time:.2f}s")
+                        with col2:
+                            st.metric("📥 Tokens Entrada", f"{usage_stats.get('input_tokens', 0):,}")
+                        with col3:
+                            st.metric("📤 Tokens Saída", f"{usage_stats.get('output_tokens', 0):,}")
+                        with col4:
+                            cost_brl = usage_stats.get('estimated_cost_brl', 0)
+                            if cost_brl > 0:
+                                st.metric("💰 Custo (BRL)", f"R$ {cost_brl:.4f}")
+                            else:
+                                st.metric("💰 Custo", "Gratuito")
+                        with col5:
+                            cost_usd = usage_stats.get('estimated_cost_usd', 0)
+                            if cost_usd > 0:
+                                st.metric("💵 Custo (USD)", f"${cost_usd:.4f}")
+                            else:
+                                st.metric("💵 USD", "-")
+                        st.markdown('</div>', unsafe_allow_html=True)
                     
-                    st.subheader("📝 Extracted Text")
-                    st.markdown(result)
+                    # Get raw result
+                    raw_result = processor.get_raw_result() or result
                     
-                    # Download buttons for single result
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        st.download_button(
-                            "📥 Download TXT",
-                            result,
-                            file_name=f"ocr_result.txt",
-                            mime="text/plain"
-                        )
-                    with col2:
-                        # Create structured DOCX
-                        doc = create_structured_docx(
-                            title='Resultado do OCR',
-                            content_dict=result,
-                            model_name=selected_model,
-                            format_type=format_type,
-                            language=language,
-                            elapsed_time=elapsed_time,
-                            is_batch=False
-                        )
-                        docx_buffer = BytesIO()
-                        doc.save(docx_buffer)
-                        docx_buffer.seek(0)
-                        st.download_button(
-                            "📥 Download DOCX",
-                            docx_buffer.getvalue(),
-                            file_name="ocr_result.docx",
-                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                        )
-                    with col3:
-                        # DOC format with structured content
-                        doc = create_structured_docx(
-                            title='Resultado do OCR',
-                            content_dict=result,
-                            model_name=selected_model,
-                            format_type=format_type,
-                            language=language,
-                            elapsed_time=elapsed_time,
-                            is_batch=False
-                        )
-                        doc_buffer = BytesIO()
-                        doc.save(doc_buffer)
-                        doc_buffer.seek(0)
-                        st.download_button(
-                            "📥 Download DOC",
-                            doc_buffer.getvalue(),
-                            file_name="ocr_result.doc",
-                            mime="application/msword"
-                        )
+                    # Display results in the selected format in a separate block
+                    st.subheader(f"📝 Resultado Processado ({format_type.upper()})")
+                    with st.container(border=True):
+                        st.markdown('<div style="font-size: 11pt;">', unsafe_allow_html=True)
+                        if format_type == "json":
+                            try:
+                                json_data = json.loads(result)
+                                st.json(json_data)
+                            except:
+                                st.code(result, language="json")
+                        elif format_type == "text":
+                            st.text(result)
+                        elif format_type in ["structured", "key_value", "table"]:
+                            st.markdown(result)
+                        else:  # markdown
+                            st.markdown(result)
+                        st.markdown('</div>', unsafe_allow_html=True)
+                    
+                    # Download options for single result in a separate block
+                    st.subheader("📥 Opções de Download")
+                    with st.container(border=True):
+                        st.markdown('<div style="font-size: 11pt;">', unsafe_allow_html=True)
+                        col1, col2, col3, col4 = st.columns(4)
+                        
+                        with col1:
+                            st.download_button(
+                                "📥 Download TXT",
+                                result,
+                                file_name=f"ocr_result.txt",
+                                mime="text/plain",
+                                key="download_txt_single"
+                            )
+                        
+                        with col2:
+                            # Create structured DOCX
+                            doc = create_structured_docx(
+                                title='Resultado do OCR',
+                                content_dict=result,
+                                model_name=selected_model,
+                                format_type=format_type,
+                                language=language,
+                                elapsed_time=elapsed_time,
+                                is_batch=False
+                            )
+                            docx_buffer = BytesIO()
+                            doc.save(docx_buffer)
+                            docx_buffer.seek(0)
+                            st.download_button(
+                                "📥 Download DOCX",
+                                docx_buffer.getvalue(),
+                                file_name="ocr_result.docx",
+                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                key="download_docx_single"
+                            )
+                        
+                        with col3:
+                            # DOC format with structured content
+                            doc = create_structured_docx(
+                                title='Resultado do OCR',
+                                content_dict=result,
+                                model_name=selected_model,
+                                format_type=format_type,
+                                language=language,
+                                elapsed_time=elapsed_time,
+                                is_batch=False
+                            )
+                            doc_buffer = BytesIO()
+                            doc.save(doc_buffer)
+                            doc_buffer.seek(0)
+                            st.download_button(
+                                "📥 Download DOC",
+                                doc_buffer.getvalue(),
+                                file_name="ocr_result.doc",
+                                mime="application/msword",
+                                key="download_doc_single"
+                            )
+                        
+                        with col4:
+                            # Raw result - exactly as LLM processed
+                            st.download_button(
+                                "📥 Download RAW",
+                                raw_result,
+                                file_name="ocr_result_raw.txt",
+                                mime="text/plain",
+                                help="Resultado exatamente como processado pela LLM, sem formatação",
+                                key="download_raw_single"
+                            )
+                        st.markdown('</div>', unsafe_allow_html=True)
                 else:
                     # Batch processing
                     status_text.text("Iniciando processamento em lote...")
-                    results = process_batch_images(
-                        processor,
-                        image_paths,
-                        format_type,
-                        enable_preprocessing,
-                        custom_prompt,
-                        language,
-                        status_text,
-                        timer_container
-                    )
+                    try:
+                        results = process_batch_images(
+                            processor,
+                            image_paths,
+                            format_type,
+                            enable_preprocessing,
+                            custom_prompt,
+                            language,
+                            status_text,
+                            timer_container
+                        )
+                    except Exception as e:
+                        st.error(f"❌ Erro no processamento em lote: {str(e)}")
+                        st.exception(e)
+                        st.stop()
                     
                     # Show final time
                     elapsed_time = time.time() - start_time
@@ -642,109 +691,191 @@ def main():
                     status_text.empty()
                     
                     # Get usage statistics
-                    usage_stats = processor.get_usage_stats()
+                    try:
+                        usage_stats = processor.get_usage_stats()
+                    except Exception as e:
+                        st.warning(f"Aviso ao obter estatísticas: {e}")
+                        usage_stats = {
+                            'input_tokens': 0,
+                            'output_tokens': 0,
+                            'estimated_cost_brl': 0,
+                            'estimated_cost_usd': 0
+                        }
                     
                     st.success(f"✅ Processamento em lote concluído em {elapsed_time:.2f}s!")
                     
-                    # Display processing statistics
-                    st.subheader("📊 Estatísticas de Processamento")
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        st.metric("Total de Imagens", results['statistics']['total'])
-                    with col2:
-                        st.metric("Sucesso", results['statistics']['successful'])
-                    with col3:
-                        st.metric("Falhas", results['statistics']['failed'])
+                    # Display processing and usage statistics side by side
+                    col_stat1, col_stat2 = st.columns(2)
                     
-                    # Display usage statistics
-                    st.subheader("💡 Estatísticas de Uso")
-                    col1, col2, col3, col4, col5 = st.columns(5)
-                    with col1:
-                        st.metric("⏱️ Tempo Total", f"{elapsed_time:.2f}s")
-                    with col2:
-                        st.metric("📥 Tokens Entrada", f"{usage_stats['input_tokens']:,}")
-                    with col3:
-                        st.metric("📤 Tokens Saída", f"{usage_stats['output_tokens']:,}")
-                    with col4:
-                        if usage_stats['estimated_cost_brl'] > 0:
-                            st.metric("💰 Custo (BRL)", f"R$ {usage_stats['estimated_cost_brl']:.4f}")
-                        else:
-                            st.metric("💰 Custo", "Gratuito")
-                    with col5:
-                        if usage_stats['estimated_cost_usd'] > 0:
-                            st.metric("💵 Custo (USD)", f"${usage_stats['estimated_cost_usd']:.4f}")
-                        else:
-                            st.metric("💵 USD", "-")
-
-                    # Display results
-                    st.subheader("📝 Extracted Text")
-                    for file_path, text in results['results'].items():
-                        with st.expander(f"Result: {os.path.basename(file_path)}"):
-                            st.markdown(text)
+                    with col_stat1:
+                        with st.container(border=True):
+                            st.subheader("📊 Estatísticas de Processamento")
+                            st.markdown('<div style="font-size: 11pt;">', unsafe_allow_html=True)
+                            col1, col2, col3 = st.columns(3)
+                            with col1:
+                                st.metric("Total de Imagens", results.get('statistics', {}).get('total', 0))
+                            with col2:
+                                st.metric("Sucesso", results.get('statistics', {}).get('successful', 0))
+                            with col3:
+                                st.metric("Falhas", results.get('statistics', {}).get('failed', 0))
+                            st.markdown('</div>', unsafe_allow_html=True)
+                    
+                    with col_stat2:
+                        with st.container(border=True):
+                            st.subheader("💡 Estatísticas de Uso")
+                            st.markdown('<div style="font-size: 11pt;">', unsafe_allow_html=True)
+                            col1, col2, col3, col4, col5 = st.columns(5)
+                            with col1:
+                                st.metric("⏱️ Tempo Total", f"{elapsed_time:.2f}s")
+                            with col2:
+                                st.metric("📥 Tokens Entrada", f"{usage_stats.get('input_tokens', 0):,}")
+                            with col3:
+                                st.metric("📤 Tokens Saída", f"{usage_stats.get('output_tokens', 0):,}")
+                            with col4:
+                                cost_brl = usage_stats.get('estimated_cost_brl', 0)
+                                if cost_brl > 0:
+                                    st.metric("💰 Custo (BRL)", f"R$ {cost_brl:.4f}")
+                                else:
+                                    st.metric("💰 Custo", "Gratuito")
+                            with col5:
+                                cost_usd = usage_stats.get('estimated_cost_usd', 0)
+                                if cost_usd > 0:
+                                    st.metric("💵 Custo (USD)", f"${cost_usd:.4f}")
+                                else:
+                                    st.metric("💵 USD", "-")
+                            st.markdown('</div>', unsafe_allow_html=True)
 
                     # Display errors if any
-                    if results['errors']:
-                        st.error("⚠️ Some files had errors:")
+                    if results.get('errors'):
+                        st.error("⚠️ Arquivos com erros:")
                         for file_path, error in results['errors'].items():
-                            st.warning(f"{os.path.basename(file_path)}: {error}")
+                            st.warning(f"❌ {os.path.basename(file_path)}: {error}")
 
-                    # Download all results in different formats
-                    st.subheader("📥 Download Options")
-                    col1, col2, col3 = st.columns(3)
+                    # Display results in the selected format
+                    if results.get('results'):
+                        st.subheader(f"📝 Resultados Processados ({format_type.upper()})")
+                        for file_path, text in results['results'].items():
+                            # Check if this is actually an error message
+                            if text.startswith("Error processing image:"):
+                                with st.expander(f"❌ {os.path.basename(file_path)} (Erro)", expanded=False):
+                                    st.error(text)
+                            else:
+                                with st.expander(f"✅ {os.path.basename(file_path)}", expanded=False):
+                                    with st.container(border=True):
+                                        st.markdown('<div style="font-size: 11pt;">', unsafe_allow_html=True)
+                                        if format_type == "json":
+                                            try:
+                                                json_data = json.loads(text)
+                                                st.json(json_data)
+                                            except:
+                                                st.code(text, language="json")
+                                        elif format_type == "text":
+                                            st.text(text)
+                                        elif format_type in ["structured", "key_value", "table"]:
+                                            st.markdown(text)
+                                        else:  # markdown
+                                            st.markdown(text)
+                                        st.markdown('</div>', unsafe_allow_html=True)
+                    else:
+                        st.warning("⚠️ Nenhum resultado foi gerado.")
+
+                    # Get raw results
+                    raw_results_dict = processor.get_raw_results()
                     
-                    with col1:
-                        # JSON format
-                        json_results = json.dumps(results, indent=2)
-                        st.download_button(
-                            "📥 Download JSON",
-                            json_results,
-                            file_name="ocr_results.json",
-                            mime="application/json"
-                        )
-                    
-                    with col2:
-                        # DOCX format - structured batch results
-                        batch_content = {os.path.basename(fp): text for fp, text in results['results'].items()}
-                        doc = create_structured_docx(
-                            title='Resultados do OCR (Lote)',
-                            content_dict=batch_content,
-                            model_name=selected_model,
-                            format_type=format_type,
-                            language=language,
-                            elapsed_time=elapsed_time,
-                            is_batch=True
-                        )
-                        docx_buffer = BytesIO()
-                        doc.save(docx_buffer)
-                        docx_buffer.seek(0)
-                        st.download_button(
-                            "📥 Download DOCX",
-                            docx_buffer.getvalue(),
-                            file_name="ocr_results.docx",
-                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                        )
-                    
-                    with col3:
-                        # DOC format - structured batch results
-                        batch_content = {os.path.basename(fp): text for fp, text in results['results'].items()}
-                        doc = create_structured_docx(
-                            title='Resultados do OCR (Lote)',
-                            content_dict=batch_content,
-                            model_name=selected_model,
-                            format_type=format_type,
-                            language=language,
-                            elapsed_time=elapsed_time,
-                            is_batch=True
-                        )
-                        doc_buffer = BytesIO()
-                        doc.save(doc_buffer)
-                        doc_buffer.seek(0)
-                        st.download_button(
-                            "📥 Download DOC",
-                            doc_buffer.getvalue(),
-                            file_name="ocr_results.doc",
-                            mime="application/msword"
-                        )
+                    # Download all results in different formats in a separate block
+                    st.subheader("📥 Opções de Download")
+                    with st.container(border=True):
+                        st.markdown('<div style="font-size: 11pt;">', unsafe_allow_html=True)
+                        if results.get('results'):
+                            col1, col2, col3, col4 = st.columns(4)
+                            
+                            with col1:
+                                # JSON format
+                                json_results = json.dumps(results, indent=2, ensure_ascii=False)
+                                st.download_button(
+                                    "📥 Download JSON",
+                                    json_results,
+                                    file_name="ocr_results.json",
+                                    mime="application/json",
+                                    key="download_json_batch"
+                                )
+                            
+                            with col2:
+                                # DOCX format - structured batch results
+                                try:
+                                    batch_content = {os.path.basename(fp): text for fp, text in results['results'].items()}
+                                    doc = create_structured_docx(
+                                        title='Resultados do OCR (Lote)',
+                                        content_dict=batch_content,
+                                        model_name=selected_model,
+                                        format_type=format_type,
+                                        language=language,
+                                        elapsed_time=elapsed_time,
+                                        is_batch=True
+                                    )
+                                    docx_buffer = BytesIO()
+                                    doc.save(docx_buffer)
+                                    docx_buffer.seek(0)
+                                    st.download_button(
+                                        "📥 Download DOCX",
+                                        docx_buffer.getvalue(),
+                                        file_name="ocr_results.docx",
+                                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                        key="download_docx_batch"
+                                    )
+                                except Exception as e:
+                                    st.error(f"Erro ao gerar DOCX: {e}")
+                            
+                            with col3:
+                                # DOC format - structured batch results
+                                try:
+                                    batch_content = {os.path.basename(fp): text for fp, text in results['results'].items()}
+                                    doc = create_structured_docx(
+                                        title='Resultados do OCR (Lote)',
+                                        content_dict=batch_content,
+                                        model_name=selected_model,
+                                        format_type=format_type,
+                                        language=language,
+                                        elapsed_time=elapsed_time,
+                                        is_batch=True
+                                    )
+                                    doc_buffer = BytesIO()
+                                    doc.save(doc_buffer)
+                                    doc_buffer.seek(0)
+                                    st.download_button(
+                                        "📥 Download DOC",
+                                        doc_buffer.getvalue(),
+                                        file_name="ocr_results.doc",
+                                        mime="application/msword",
+                                        key="download_doc_batch"
+                                    )
+                                except Exception as e:
+                                    st.error(f"Erro ao gerar DOC: {e}")
+                            
+                            with col4:
+                                # RAW format - exactly as LLM processed
+                                try:
+                                    # Combine all raw results
+                                    raw_content = []
+                                    for fp, text in results['results'].items():
+                                        file_name = os.path.basename(fp)
+                                        raw_text = raw_results_dict.get(fp, text)  # Fallback to formatted if raw not available
+                                        raw_content.append(f"=== {file_name} ===\n{raw_text}\n\n")
+                                    
+                                    raw_all = "\n".join(raw_content)
+                                    st.download_button(
+                                        "📥 Download RAW",
+                                        raw_all,
+                                        file_name="ocr_results_raw.txt",
+                                        mime="text/plain",
+                                        help="Resultados exatamente como processados pela LLM, sem formatação",
+                                        key="download_raw_batch"
+                                    )
+                                except Exception as e:
+                                    st.error(f"Erro ao gerar RAW: {e}")
+                        else:
+                            st.info("📝 Nenhum resultado disponível para download.")
+                        st.markdown('</div>', unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()

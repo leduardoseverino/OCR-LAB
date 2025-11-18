@@ -49,10 +49,15 @@ class OCRProcessor:
         self.api_key = api_key
         self.progress_callback = progress_callback
         
-        # Token tracking
+        # Token tracking with thread safety
         self.total_input_tokens = 0
         self.total_output_tokens = 0
         self.total_cost = 0.0
+        self.stats_lock = Lock()  # Lock for thread-safe stats updates
+        
+        # Raw result storage
+        self.last_raw_result = None
+        self.raw_results = {}  # For batch processing
         
         # Initialize tokenizer for OpenAI models
         if self.api_provider == "openai":
@@ -146,6 +151,16 @@ class OCRProcessor:
         self.total_input_tokens = 0
         self.total_output_tokens = 0
         self.total_cost = 0.0
+        self.last_raw_result = None
+        self.raw_results = {}
+    
+    def get_raw_result(self) -> Optional[str]:
+        """Get the last raw result from LLM"""
+        return self.last_raw_result
+    
+    def get_raw_results(self) -> Dict[str, str]:
+        """Get all raw results from batch processing"""
+        return self.raw_results.copy()
 
     def _encode_image(self, image_path: str) -> str:
         """Convert image to base64 string"""
@@ -191,9 +206,11 @@ class OCRProcessor:
         input_tokens = usage.get("prompt_tokens", 0)
         output_tokens = usage.get("completion_tokens", 0)
         
-        self.total_input_tokens += input_tokens
-        self.total_output_tokens += output_tokens
-        self.total_cost += self._calculate_cost(input_tokens, output_tokens)
+        # Update token tracking with thread safety
+        with self.stats_lock:
+            self.total_input_tokens += input_tokens
+            self.total_output_tokens += output_tokens
+            self.total_cost += self._calculate_cost(input_tokens, output_tokens)
         
         return result["choices"][0]["message"]["content"]
     
@@ -239,9 +256,11 @@ class OCRProcessor:
         if output_tokens == 0:
             output_tokens = self._estimate_tokens(response_text)
         
-        self.total_input_tokens += input_tokens
-        self.total_output_tokens += output_tokens
-        self.total_cost += self._calculate_cost(input_tokens, output_tokens)
+        # Update token tracking with thread safety
+        with self.stats_lock:
+            self.total_input_tokens += input_tokens
+            self.total_output_tokens += output_tokens
+            self.total_cost += self._calculate_cost(input_tokens, output_tokens)
         
         return response_text
     
@@ -269,9 +288,11 @@ class OCRProcessor:
             
             output_tokens = self._estimate_tokens(result_text)
             
-            self.total_input_tokens += input_tokens
-            self.total_output_tokens += output_tokens
-            # Ollama is free
+            # Update token tracking with thread safety (Ollama only tracks tokens, no cost)
+            with self.stats_lock:
+                self.total_input_tokens += input_tokens
+                self.total_output_tokens += output_tokens
+                # Ollama is free
             
             return result_text
 
@@ -349,6 +370,9 @@ class OCRProcessor:
             language: Language code to apply language specific OCR preprocessing
         """
         try:
+            # Reset raw result for this processing
+            self.last_raw_result = None
+            
             # If the input is a PDF, process all pages
             if image_path.lower().endswith('.pdf'):
                 image_pages = self._pdf_to_images(image_path)
@@ -424,6 +448,11 @@ class OCRProcessor:
 
                     # Make the API call
                     res = self._call_vision_api(image_base64, prompt, preprocessed_path)
+                    # Store raw result for this page
+                    if self.last_raw_result:
+                        self.last_raw_result += f"\n\n--- Page {idx + 1} ---\n{res}"
+                    else:
+                        self.last_raw_result = f"--- Page {idx + 1} ---\n{res}"
                     # Prefix result with page number
                     responses.append(f"Page {idx + 1}:\n{res}")
 
@@ -503,6 +532,9 @@ class OCRProcessor:
 
             result = self._call_vision_api(image_base64, prompt, processed_path)
             
+            # Store raw result before any formatting
+            self.last_raw_result = result
+            
             # Clean up temporary files
             if processed_path.endswith(('_preprocessed.jpg', '_temp.jpg')):
                 os.remove(processed_path)
@@ -516,6 +548,10 @@ class OCRProcessor:
 
             return result
         except Exception as e:
+            import traceback
+            error_details = traceback.format_exc()
+            error_msg = f"Error processing image {image_path}: {str(e)}\n\nDetails:\n{error_details}"
+            print(error_msg)  # Log to console for debugging
             return f"Error processing image: {str(e)}"
 
     def process_batch(
@@ -559,25 +595,42 @@ class OCRProcessor:
         completed = 0
         total = len(image_paths)
 
-        # Process images in parallel with progress bar
+        # Process images sequentially (one at a time) to avoid concurrency issues
         with tqdm(total=total, desc="Processing images", disable=self.progress_callback is not None) as pbar:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-                future_to_path = {
-                    executor.submit(self.process_image, str(path), format_type, preprocess, custom_prompt, language): path
-                    for path in image_paths
-                }
-                
-                for future in concurrent.futures.as_completed(future_to_path):
-                    path = future_to_path[future]
-                    try:
-                        results[str(path)] = future.result()
-                    except Exception as e:
-                        errors[str(path)] = str(e)
-                    
+            for path in image_paths:
+                path_str = str(path)
+                try:
+                    # Update progress before processing
                     completed += 1
                     if self.progress_callback:
-                        self.progress_callback(completed, total, f"Processando arquivo {completed} de {total}")
-                    pbar.update(1)
+                        self.progress_callback(completed, total, f"Processando arquivo {completed} de {total}: {os.path.basename(path_str)}")
+                    
+                    # Process one file at a time
+                    result = self.process_image(
+                        image_path=path_str,
+                        format_type=format_type,
+                        preprocess=preprocess,
+                        custom_prompt=custom_prompt,
+                        language=language
+                    )
+                    
+                    # Store raw result for this file
+                    if self.last_raw_result:
+                        self.raw_results[path_str] = self.last_raw_result
+                        self.last_raw_result = None  # Reset for next file
+                    
+                    # Check if result is an error message
+                    if result.startswith("Error processing image:"):
+                        errors[path_str] = result
+                    else:
+                        results[path_str] = result
+                        
+                except Exception as e:
+                    error_msg = f"Error processing image: {str(e)}"
+                    errors[path_str] = error_msg
+                    print(f"Erro ao processar {path_str}: {error_msg}")  # Log error
+                
+                pbar.update(1)
 
         return {
             "results": results,
