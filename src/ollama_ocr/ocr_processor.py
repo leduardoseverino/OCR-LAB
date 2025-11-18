@@ -11,6 +11,9 @@ import pymupdf
 import numpy as np
 from threading import Lock
 import tiktoken
+import time
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 class OCRProcessor:
     # Preços por 1M tokens (input/output) - atualizados conforme a API
@@ -71,6 +74,39 @@ class OCRProcessor:
         # Validate API key for external providers
         if self.api_provider in ["openai", "gemini"] and not self.api_key:
             raise ValueError(f"API key is required for {self.api_provider}")
+        
+        # Create session with retry logic
+        self.session = self._create_retry_session()
+    
+    def _create_retry_session(self, 
+                              retries: int = 5,
+                              backoff_factor: float = 1.0,
+                              status_forcelist: tuple = (500, 502, 503, 504, 429)) -> requests.Session:
+        """
+        Create a requests session with automatic retry logic for transient errors.
+        
+        Args:
+            retries: Maximum number of retry attempts
+            backoff_factor: Multiplier for exponential backoff (wait time = backoff_factor * (2 ** retry_count))
+            status_forcelist: HTTP status codes that should trigger a retry
+        
+        Returns:
+            Configured requests.Session object
+        """
+        session = requests.Session()
+        retry = Retry(
+            total=retries,
+            read=retries,
+            connect=retries,
+            backoff_factor=backoff_factor,
+            status_forcelist=status_forcelist,
+            allowed_methods=["POST", "GET"],  # Allow retries for POST and GET
+            raise_on_status=False  # Don't raise immediately, let us handle it
+        )
+        adapter = HTTPAdapter(max_retries=retry)
+        session.mount("http://", adapter)
+        session.mount("https://", adapter)
+        return session
     
     def _estimate_tokens(self, text: str) -> int:
         """Estimate token count for text"""
@@ -168,7 +204,7 @@ class OCRProcessor:
             return base64.b64encode(image_file.read()).decode("utf-8")
     
     def _call_openai_vision(self, image_base64: str, prompt: str, image_path: str = None) -> str:
-        """Call OpenAI Vision API"""
+        """Call OpenAI Vision API with retry logic"""
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.api_key}"
@@ -193,29 +229,41 @@ class OCRProcessor:
             "max_tokens": 4096
         }
         
-        response = requests.post(
-            "https://api.openai.com/v1/chat/completions",
-            headers=headers,
-            json=payload
-        )
-        response.raise_for_status()
-        result = response.json()
-        
-        # Track tokens
-        usage = result.get("usage", {})
-        input_tokens = usage.get("prompt_tokens", 0)
-        output_tokens = usage.get("completion_tokens", 0)
-        
-        # Update token tracking with thread safety
-        with self.stats_lock:
-            self.total_input_tokens += input_tokens
-            self.total_output_tokens += output_tokens
-            self.total_cost += self._calculate_cost(input_tokens, output_tokens)
-        
-        return result["choices"][0]["message"]["content"]
+        max_retries = 5
+        for attempt in range(max_retries):
+            try:
+                response = self.session.post(
+                    "https://api.openai.com/v1/chat/completions",
+                    headers=headers,
+                    json=payload,
+                    timeout=120  # 2 minute timeout
+                )
+                response.raise_for_status()
+                result = response.json()
+                
+                # Track tokens
+                usage = result.get("usage", {})
+                input_tokens = usage.get("prompt_tokens", 0)
+                output_tokens = usage.get("completion_tokens", 0)
+                
+                # Update token tracking with thread safety
+                with self.stats_lock:
+                    self.total_input_tokens += input_tokens
+                    self.total_output_tokens += output_tokens
+                    self.total_cost += self._calculate_cost(input_tokens, output_tokens)
+                
+                return result["choices"][0]["message"]["content"]
+            
+            except requests.exceptions.RequestException as e:
+                if attempt < max_retries - 1:
+                    wait_time = (2 ** attempt) * 2  # Exponential backoff: 2, 4, 8, 16 seconds
+                    print(f"⚠️ OpenAI API error (attempt {attempt + 1}/{max_retries}): {str(e)}. Retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                else:
+                    raise Exception(f"OpenAI API failed after {max_retries} attempts: {str(e)}")
     
     def _call_gemini_vision(self, image_base64: str, prompt: str, image_path: str = None) -> str:
-        """Call Google Gemini Vision API"""
+        """Call Google Gemini Vision API with retry logic"""
         headers = {
             "Content-Type": "application/json"
         }
@@ -237,32 +285,49 @@ class OCRProcessor:
         }
         
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model_name}:generateContent?key={self.api_key}"
-        response = requests.post(url, headers=headers, json=payload)
-        response.raise_for_status()
-        result = response.json()
         
-        # Track tokens (Gemini provides usage metadata)
-        usage = result.get("usageMetadata", {})
-        input_tokens = usage.get("promptTokenCount", 0)
-        output_tokens = usage.get("candidatesTokenCount", 0)
-        
-        # If tokens not provided, estimate them
-        if input_tokens == 0:
-            input_tokens = self._estimate_tokens(prompt)
-            if image_path:
-                input_tokens += self._estimate_image_tokens(image_path)
-        
-        response_text = result["candidates"][0]["content"]["parts"][0]["text"]
-        if output_tokens == 0:
-            output_tokens = self._estimate_tokens(response_text)
-        
-        # Update token tracking with thread safety
-        with self.stats_lock:
-            self.total_input_tokens += input_tokens
-            self.total_output_tokens += output_tokens
-            self.total_cost += self._calculate_cost(input_tokens, output_tokens)
-        
-        return response_text
+        max_retries = 5
+        for attempt in range(max_retries):
+            try:
+                response = self.session.post(
+                    url, 
+                    headers=headers, 
+                    json=payload,
+                    timeout=120  # 2 minute timeout
+                )
+                response.raise_for_status()
+                result = response.json()
+                
+                # Track tokens (Gemini provides usage metadata)
+                usage = result.get("usageMetadata", {})
+                input_tokens = usage.get("promptTokenCount", 0)
+                output_tokens = usage.get("candidatesTokenCount", 0)
+                
+                # If tokens not provided, estimate them
+                if input_tokens == 0:
+                    input_tokens = self._estimate_tokens(prompt)
+                    if image_path:
+                        input_tokens += self._estimate_image_tokens(image_path)
+                
+                response_text = result["candidates"][0]["content"]["parts"][0]["text"]
+                if output_tokens == 0:
+                    output_tokens = self._estimate_tokens(response_text)
+                
+                # Update token tracking with thread safety
+                with self.stats_lock:
+                    self.total_input_tokens += input_tokens
+                    self.total_output_tokens += output_tokens
+                    self.total_cost += self._calculate_cost(input_tokens, output_tokens)
+                
+                return response_text
+            
+            except requests.exceptions.RequestException as e:
+                if attempt < max_retries - 1:
+                    wait_time = (2 ** attempt) * 2  # Exponential backoff: 2, 4, 8, 16, 32 seconds
+                    print(f"⚠️ Gemini API error (attempt {attempt + 1}/{max_retries}): {str(e)}. Retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                else:
+                    raise Exception(f"Gemini API failed after {max_retries} attempts: {str(e)}")
     
     def _call_vision_api(self, image_base64: str, prompt: str, image_path: str = None) -> str:
         """Route to appropriate vision API based on provider"""
@@ -282,19 +347,35 @@ class OCRProcessor:
                 "stream": False,
                 "images": [image_base64]
             }
-            response = requests.post(self.base_url, json=payload)
-            response.raise_for_status()
-            result_text = response.json().get("response", "")
             
-            output_tokens = self._estimate_tokens(result_text)
-            
-            # Update token tracking with thread safety (Ollama only tracks tokens, no cost)
-            with self.stats_lock:
-                self.total_input_tokens += input_tokens
-                self.total_output_tokens += output_tokens
-                # Ollama is free
-            
-            return result_text
+            max_retries = 3  # Fewer retries for local Ollama
+            for attempt in range(max_retries):
+                try:
+                    response = self.session.post(
+                        self.base_url, 
+                        json=payload,
+                        timeout=300  # 5 minute timeout for local processing
+                    )
+                    response.raise_for_status()
+                    result_text = response.json().get("response", "")
+                    
+                    output_tokens = self._estimate_tokens(result_text)
+                    
+                    # Update token tracking with thread safety (Ollama only tracks tokens, no cost)
+                    with self.stats_lock:
+                        self.total_input_tokens += input_tokens
+                        self.total_output_tokens += output_tokens
+                        # Ollama is free
+                    
+                    return result_text
+                
+                except requests.exceptions.RequestException as e:
+                    if attempt < max_retries - 1:
+                        wait_time = (2 ** attempt) * 1  # Shorter backoff for local: 1, 2, 4 seconds
+                        print(f"⚠️ Ollama API error (attempt {attempt + 1}/{max_retries}): {str(e)}. Retrying in {wait_time}s...")
+                        time.sleep(wait_time)
+                    else:
+                        raise Exception(f"Ollama API failed after {max_retries} attempts: {str(e)}")
 
     def _pdf_to_images(self, pdf_path: str) -> List[str]:
         """

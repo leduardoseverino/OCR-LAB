@@ -107,57 +107,85 @@ def get_openai_models(api_key):
     if not api_key:
         return []
     
-    try:
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json"
-        }
-        response = requests.get("https://api.openai.com/v1/models", headers=headers, timeout=10)
-        if response.status_code == 200:
-            models_data = response.json()
-            # Get all available models (not just vision-specific)
-            all_models = []
-            for model in models_data.get("data", []):
-                model_id = model.get("id", "")
-                # Include all GPT models
-                if model_id.startswith("gpt-"):
-                    all_models.append(model_id)
-            
-            # Sort and return unique models
-            all_models = sorted(set(all_models), reverse=True)
-            return all_models if all_models else []
-        else:
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json"
+            }
+            response = requests.get("https://api.openai.com/v1/models", headers=headers, timeout=10)
+            if response.status_code == 200:
+                models_data = response.json()
+                # Get all available models (not just vision-specific)
+                all_models = []
+                for model in models_data.get("data", []):
+                    model_id = model.get("id", "")
+                    # Include all GPT models
+                    if model_id.startswith("gpt-"):
+                        all_models.append(model_id)
+                
+                # Sort and return unique models
+                all_models = sorted(set(all_models), reverse=True)
+                return all_models if all_models else []
+            elif response.status_code in [500, 502, 503, 504] and attempt < max_retries - 1:
+                # Retry on server errors
+                time.sleep(2 ** attempt)
+                continue
+            else:
+                return []
+        except requests.exceptions.RequestException as e:
+            if attempt < max_retries - 1:
+                time.sleep(2 ** attempt)
+                continue
+            else:
+                st.warning(f"Erro ao buscar modelos da OpenAI após {max_retries} tentativas: {str(e)}")
+                return []
+        except Exception as e:
+            st.warning(f"Erro ao buscar modelos da OpenAI: {str(e)}")
             return []
-    except Exception as e:
-        st.warning(f"Erro ao buscar modelos da OpenAI: {str(e)}")
-        return []
+    return []
 
 def get_gemini_models(api_key):
     """Get available models from Google Gemini API"""
     if not api_key:
         return []
     
-    try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
-        response = requests.get(url, timeout=10)
-        if response.status_code == 200:
-            models_data = response.json()
-            gemini_models = []
-            for model in models_data.get("models", []):
-                model_name = model.get("name", "")
-                # Extract model ID from full name (e.g., "models/gemini-pro" -> "gemini-pro")
-                if "/" in model_name:
-                    model_id = model_name.split("/")[-1]
-                    # Only include models that support vision
-                    if "vision" in model_id.lower() or "gemini-1.5" in model_id or "gemini-2" in model_id:
-                        gemini_models.append(model_id)
-            
-            return sorted(set(gemini_models), reverse=True) if gemini_models else []
-        else:
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
+            response = requests.get(url, timeout=10)
+            if response.status_code == 200:
+                models_data = response.json()
+                gemini_models = []
+                for model in models_data.get("models", []):
+                    model_name = model.get("name", "")
+                    # Extract model ID from full name (e.g., "models/gemini-pro" -> "gemini-pro")
+                    if "/" in model_name:
+                        model_id = model_name.split("/")[-1]
+                        # Only include models that support vision
+                        if "vision" in model_id.lower() or "gemini-1.5" in model_id or "gemini-2" in model_id:
+                            gemini_models.append(model_id)
+                
+                return sorted(set(gemini_models), reverse=True) if gemini_models else []
+            elif response.status_code in [500, 502, 503, 504] and attempt < max_retries - 1:
+                # Retry on server errors
+                time.sleep(2 ** attempt)
+                continue
+            else:
+                return []
+        except requests.exceptions.RequestException as e:
+            if attempt < max_retries - 1:
+                time.sleep(2 ** attempt)
+                continue
+            else:
+                st.warning(f"Erro ao buscar modelos do Gemini após {max_retries} tentativas: {str(e)}")
+                return []
+        except Exception as e:
+            st.warning(f"Erro ao buscar modelos do Gemini: {str(e)}")
             return []
-    except Exception as e:
-        st.warning(f"Erro ao buscar modelos do Gemini: {str(e)}")
-        return []
+    return []
 
 def process_single_image(processor, image_path, format_type, enable_preprocessing, custom_prompt, language, status_text, timer_text):
     """Process a single image and return the result"""
