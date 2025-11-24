@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 <div align="center">
-  <img src="https://www.skyone.com.br/wp-content/uploads/2023/06/logo-skyone.svg" alt="Skyone Logo" width="200"/>
+  <img src="https://ghbranding.com.br/wp-content/uploads/2024/01/hero-skyone.svg" alt="Skyone Logo" width="400"/>
 </div>
 
 ---
