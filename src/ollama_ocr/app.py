@@ -10,8 +10,9 @@ import requests
 import time
 from datetime import timedelta, datetime
 from docx import Document
-from docx.shared import Pt, RGBColor, Inches
-from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.shared import Pt, RGBColor, Inches, Cm
+from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
+from docx.oxml.ns import qn
 
 # Page configuration
 st.set_page_config(
@@ -72,6 +73,25 @@ st.markdown("""
     }
     .sidebar .sidebar-content {
         background-color: #F7F7F7;
+    }
+    .warning-highlight {
+        background-color: #FFF9C4;
+        border-left: 4px solid #FBC02D;
+        padding: 1rem 1.5rem;
+        margin: 1rem 0;
+        border-radius: 6px;
+        box-shadow: 0 2px 4px rgba(251, 192, 45, 0.2);
+    }
+    .warning-highlight p {
+        color: #856404;
+        font-weight: 500;
+        margin: 0;
+        font-size: 0.95rem;
+        line-height: 1.5;
+    }
+    .warning-highlight strong {
+        color: #6B5500;
+        font-weight: 600;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -343,14 +363,135 @@ def create_structured_docx(title, content_dict, model_name, format_type, languag
     
     return doc
 
+def create_minuta_doc(content_dict, is_batch=False):
+    """Create a document formatted according to Brazilian legal document standards (peças processuais)"""
+    doc = Document()
+    
+    # Configure page margins according to legal standards
+    # Superior: 3cm, Esquerda: 3cm, Inferior: 2cm, Direita: 2cm
+    sections = doc.sections
+    for section in sections:
+        section.top_margin = Cm(3)
+        section.left_margin = Cm(3)
+        section.bottom_margin = Cm(2)
+        section.right_margin = Cm(2)
+    
+    # Set default font and paragraph style
+    style = doc.styles['Normal']
+    font = style.font
+    font.name = 'Times New Roman'
+    font.size = Pt(12)
+    
+    # Configure paragraph spacing (1.5 line spacing)
+    paragraph_format = style.paragraph_format
+    paragraph_format.line_spacing_rule = WD_LINE_SPACING.MULTIPLE
+    paragraph_format.line_spacing = 1.5
+    paragraph_format.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+    paragraph_format.space_after = Pt(0)
+    paragraph_format.space_before = Pt(0)
+    
+    # Add content
+    if is_batch:
+        # For batch processing
+        for idx, (file_name, text) in enumerate(content_dict.items(), 1):
+            if idx > 1:
+                # Add page break between files
+                doc.add_page_break()
+            
+            # Split content into paragraphs (handle both \n\n and \n)
+            paragraphs = text.replace('\r\n', '\n').split('\n\n')
+            for para_text in paragraphs:
+                # Also split by single \n to handle line breaks within paragraphs
+                lines = para_text.split('\n')
+                para_content = ' '.join(line.strip() for line in lines if line.strip())
+                if para_content:
+                    p = doc.add_paragraph(para_content)
+                    p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+                    # Apply paragraph formatting
+                    p_format = p.paragraph_format
+                    p_format.line_spacing_rule = WD_LINE_SPACING.MULTIPLE
+                    p_format.line_spacing = 1.5
+                    p_format.space_after = Pt(0)
+                    p_format.space_before = Pt(0)
+                    # Apply formatting to all runs in paragraph
+                    for run in p.runs:
+                        run.font.name = 'Times New Roman'
+                        run.font.size = Pt(12)
+    else:
+        # For single file processing
+        # Split content into paragraphs (handle both \n\n and \n)
+        paragraphs = content_dict.replace('\r\n', '\n').split('\n\n')
+        for para_text in paragraphs:
+            # Also split by single \n to handle line breaks within paragraphs
+            lines = para_text.split('\n')
+            para_content = ' '.join(line.strip() for line in lines if line.strip())
+            if para_content:
+                p = doc.add_paragraph(para_content)
+                p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+                # Apply paragraph formatting
+                p_format = p.paragraph_format
+                p_format.line_spacing_rule = WD_LINE_SPACING.MULTIPLE
+                p_format.line_spacing = 1.5
+                p_format.space_after = Pt(0)
+                p_format.space_before = Pt(0)
+                # Apply formatting to all runs in paragraph
+                for run in p.runs:
+                    run.font.name = 'Times New Roman'
+                    run.font.size = Pt(12)
+    
+    # Configure header and footer for page numbering
+    section = doc.sections[0]
+    
+    # Footer with page number
+    footer = section.footer
+    footer_para = footer.paragraphs[0]
+    footer_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    
+    # Add page number field (will be updated by Word)
+    run = footer_para.add_run()
+    run.font.name = 'Times New Roman'
+    run.font.size = Pt(10)
+    # Use a simple text approach for page numbers
+    # Note: Actual page numbering requires Word fields which python-docx doesn't fully support
+    # The document will be properly numbered when opened in Word
+    
+    return doc
+
 def main():
-    st.title("OCR Vision – Skyone LAB")
+    # Modern Streamlit-style header
     st.markdown("""
-    <div style='text-align: left; margin-bottom: 2rem;'>
-        <p style='font-size: 0.9rem; color: black; margin-bottom: 0.5rem;'>
-            Uma tecnologia de visão computacional e IA criada pelo Skyone LAB para extrair e interpretar textos de documentos, imagens e PDFs com máxima acurácia.
+    <div style='
+        padding: 1.5rem 0;
+        margin-bottom: 2rem;
+        border-bottom: 2px solid #E0E0E0;
+    '>
+        <h1 style='
+            color: #1F1F1F;
+            font-size: 2.25rem;
+            font-weight: 700;
+            margin: 0 0 0.5rem 0;
+            padding: 0;
+            line-height: 1.2;
+        '>
+            🔍 OCR Vision
+        </h1>
+        <p style='
+            color: #666666;
+            font-size: 1rem;
+            margin: 0 0 1rem 0;
+            padding: 0;
+            font-weight: 500;
+        '>
+            Skyone LAB
         </p>
-        <p style='font-size: 0.9rem; color: black;'>
+        <p style='
+            color: #4A4A4A;
+            font-size: 0.95rem;
+            margin: 0;
+            padding: 0;
+            line-height: 1.6;
+        '>
+            Uma tecnologia de visão computacional e IA para extrair e interpretar textos de documentos, imagens e PDFs com máxima acurácia. 
             Projetado para impulsionar automações no Skyone Studio e alimentar agentes de IA com dados estruturados e confiáveis.
         </p>
     </div>
@@ -417,18 +558,58 @@ def main():
         
         format_type = st.selectbox(
             "📄 Formato de Saída",
-            ["markdown", "text", "json", "structured", "key_value", "table"],
+            ["Markdown", "Texto", "JSON", "Estruturado", "Chave-Valor", "Tabela"],
             help="Escolha como deseja formatar o texto extraído"
         )
         
-        # Custom prompt input (required)
-        custom_prompt_input = st.text_area(
-            "📝 Prompt Personalizado *",
-            value="",
-            placeholder="Digite seu prompt aqui (obrigatório)",
-            help="Insira um prompt personalizado para extração de texto. Este campo é obrigatório.",
-            height=200
+        # Prompt type selection
+        prompt_type = st.selectbox(
+            "📝 Tipo de Prompt",
+            ["Manual", "Automático"],
+            help="Escolha entre prompt manual (personalizado) ou automático (padrão otimizado)"
         )
+        
+        # Automatic prompt
+        automatic_prompt = """Siga as instruções abaixo para processar o conteúdo do arquivo:
+
+1. Transcrição Integral e Fiel: Leia o arquivo e transcreva o conteúdo integral, mantendo o máximo de fidelidade possível ao formato e à estrutura do documento original.
+
+2. Correção Automática de OCR: Corrija automaticamente erros evidentes de reconhecimento de texto (OCR), como:
+
+• Caracteres trocados ou distorcidos.
+
+• Letras ou pontuações faltando.
+
+• Palavras fragmentadas (unir).
+
+• Acentuação ou ortografia incorreta.
+
+3. Marcação de Ilegibilidade: Quando um trecho esperado não puder ser lido, estiver ilegível, ausente ou houver incerteza sobre a informação, utilize a marcação textual [TRECHO ILEGÍVEL] imediatamente no local exato onde a falha ocorreu.
+
+4. Não Invente Informações: Não invente ou deduza conteúdo para preencher as lacunas. A marcação [TRECHO ILEGÍVEL] deve ser usada sempre que a leitura for incerta ou impossível.
+
+5. Reconstrução de Estruturas: Se detectar tabelas, quadros ou campos pré-definidos, reconstrua-os de forma limpa e legível utilizando formatação de texto (tabelas em Markdown ou listas) para manter a organização dos dados.
+
+6. Extração de Campos: Após a transcrição completa, apresente uma seção separada com a extração de campos e tópicos chave, formatada em formato de lista ou tabela."""
+        
+        # Custom prompt input (conditional)
+        if prompt_type == "Manual":
+            custom_prompt_input = st.text_area(
+                "📝 Prompt Personalizado *",
+                value="",
+                placeholder="Digite seu prompt aqui (obrigatório)",
+                help="Insira um prompt personalizado para extração de texto. Este campo é obrigatório.",
+                height=200
+            )
+        else:
+            custom_prompt_input = automatic_prompt
+            st.text_area(
+                "📝 Prompt Automático",
+                value=automatic_prompt,
+                help="Prompt automático otimizado para OCR com correção e marcação de ilegibilidade",
+                height=200,
+                disabled=True
+            )
 
         language = st.text_input(
             "🌍 Idioma",
@@ -436,19 +617,20 @@ def main():
             help="Insira o idioma do texto na imagem (ex: pt-br para Português, en para Inglês)."
         )
 
-        max_workers = st.slider(
+        max_workers = st.selectbox(
             "🔄 Processamento Paralelo",
-            min_value=1,
-            max_value=8,
-            value=2,
+            options=[1, 2, 3, 4, 5, 6, 7, 8],
+            index=1,  # Default value 2
             help="Número de imagens a processar em paralelo (para processamento em lote)"
         )
 
-        enable_preprocessing = st.checkbox(
+        preprocessing_option = st.selectbox(
             "🔍 Pré-processamento",
-            value=True,
+            options=["Ativado", "Desativado"],
+            index=0,  # Default "Ativado"
             help="Aplicar aprimoramento e pré-processamento de imagem"
         )
+        enable_preprocessing = preprocessing_option == "Ativado"
         
         # Model info box
         if selected_model == "llava:7b":
@@ -460,14 +642,28 @@ def main():
         elif selected_model == "moondream":
             st.info("Moondream: Modelo leve projetado para dispositivos de borda")
         
-        # Exchange rate info
-        st.divider()
-        st.caption("💱 Taxa de Câmbio: USD 1.00 = R$ 6.10")
-        st.caption("📊 Custos calculados automaticamente para cada processamento")
+        # Exchange rate info (hidden/commented)
+        # st.divider()
+        # st.caption("💱 Taxa de Câmbio: USD 1.00 = R$ 6.10")
+        # st.caption("📊 Custos calculados automaticamente para cada processamento")
         
     
-    # Validate that custom prompt is provided
-    custom_prompt = custom_prompt_input.strip() if custom_prompt_input.strip() != "" else None
+    # Map translated format names to internal format values
+    format_map = {
+        "Markdown": "markdown",
+        "Texto": "text",
+        "JSON": "json",
+        "Estruturado": "structured",
+        "Chave-Valor": "key_value",
+        "Tabela": "table"
+    }
+    format_type_internal = format_map.get(format_type, "markdown")
+    
+    # Set custom prompt based on type
+    if prompt_type == "Automático":
+        custom_prompt = automatic_prompt
+    else:
+        custom_prompt = custom_prompt_input.strip() if custom_prompt_input.strip() != "" else None
 
     # Map provider name to internal format
     provider_map = {
@@ -523,7 +719,7 @@ def main():
                 # Reset flag
                 st.session_state['process_clicked'] = False
                 # Validate custom prompt
-                if not custom_prompt:
+                if prompt_type == "Manual" and not custom_prompt:
                     st.error("⚠️ Prompt Personalizado é obrigatório. Por favor, insira um prompt antes de processar.")
                     st.stop()
                 
@@ -551,7 +747,7 @@ def main():
                     result = process_single_image(
                         processor, 
                         image_paths[0], 
-                        format_type,
+                        format_type_internal,
                         enable_preprocessing,
                         custom_prompt,
                         language,
@@ -582,25 +778,26 @@ def main():
                     with st.container(border=True):
                         st.subheader("📊 Estatísticas de Uso")
                         st.markdown('<div style="font-size: 11pt;">', unsafe_allow_html=True)
-                        col1, col2, col3, col4, col5 = st.columns(5)
+                        col1, col2, col3 = st.columns(3)
                         with col1:
                             st.metric("⏱️ Tempo", f"{elapsed_time:.2f}s")
                         with col2:
                             st.metric("📥 Tokens Entrada", f"{usage_stats.get('input_tokens', 0):,}")
                         with col3:
                             st.metric("📤 Tokens Saída", f"{usage_stats.get('output_tokens', 0):,}")
-                        with col4:
-                            cost_brl = usage_stats.get('estimated_cost_brl', 0)
-                            if cost_brl > 0:
-                                st.metric("💰 Custo (BRL)", f"R$ {cost_brl:.4f}")
-                            else:
-                                st.metric("💰 Custo", "Gratuito")
-                        with col5:
-                            cost_usd = usage_stats.get('estimated_cost_usd', 0)
-                            if cost_usd > 0:
-                                st.metric("💵 Custo (USD)", f"${cost_usd:.4f}")
-                            else:
-                                st.metric("💵 USD", "-")
+                        # Cost metrics (hidden/commented)
+                        # with col4:
+                        #     cost_brl = usage_stats.get('estimated_cost_brl', 0)
+                        #     if cost_brl > 0:
+                        #         st.metric("💰 Custo (BRL)", f"R$ {cost_brl:.4f}")
+                        #     else:
+                        #         st.metric("💰 Custo", "Gratuito")
+                        # with col5:
+                        #     cost_usd = usage_stats.get('estimated_cost_usd', 0)
+                        #     if cost_usd > 0:
+                        #         st.metric("💵 Custo (USD)", f"${cost_usd:.4f}")
+                        #     else:
+                        #         st.metric("💵 USD", "-")
                         st.markdown('</div>', unsafe_allow_html=True)
                     
                     # Get raw result
@@ -612,29 +809,38 @@ def main():
                     except (AttributeError, Exception):
                         raw_result = result
                     
-                    # Display results in the selected format in a separate block
-                    st.subheader(f"📝 Resultado Processado ({format_type.upper()})")
-                    with st.container(border=True):
-                        st.markdown('<div style="font-size: 11pt;">', unsafe_allow_html=True)
-                        if format_type == "json":
-                            try:
-                                json_data = json.loads(result)
-                                st.json(json_data)
-                            except:
-                                st.code(result, language="json")
-                        elif format_type == "text":
-                            st.text(result)
-                        elif format_type in ["structured", "key_value", "table"]:
-                            st.markdown(result)
-                        else:  # markdown
-                            st.markdown(result)
-                        st.markdown('</div>', unsafe_allow_html=True)
+                    # Check if result is empty or contains only error messages
+                    if not result or not result.strip() or result.startswith("Error processing image:") or len(result.strip()) < 3:
+                        st.markdown("""
+                        <div class="warning-highlight">
+                            <p><strong>⚠️ Atenção:</strong> Nenhum conteúdo foi extraído do arquivo processado.</p>
+                            <p style="margin-top: 0.5rem; font-size: 0.9rem;">O processamento pode ter falhado ou o arquivo pode não conter texto legível. Verifique o arquivo e tente novamente.</p>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    else:
+                        # Display results in the selected format in a separate block
+                        st.subheader(f"📝 Resultado Processado ({format_type})")
+                        with st.container(border=True):
+                            st.markdown('<div style="font-size: 11pt;">', unsafe_allow_html=True)
+                            if format_type_internal == "json":
+                                try:
+                                    json_data = json.loads(result)
+                                    st.json(json_data)
+                                except:
+                                    st.code(result, language="json")
+                            elif format_type_internal == "text":
+                                st.text(result)
+                            elif format_type_internal in ["structured", "key_value", "table"]:
+                                st.markdown(result)
+                            else:  # markdown
+                                st.markdown(result)
+                            st.markdown('</div>', unsafe_allow_html=True)
                     
                     # Download options for single result in a separate block
                     st.subheader("📥 Opções de Download")
                     with st.container(border=True):
                         st.markdown('<div style="font-size: 11pt;">', unsafe_allow_html=True)
-                        col1, col2, col3, col4 = st.columns(4)
+                        col1, col2, col3, col4, col5 = st.columns(5)
                         
                         with col1:
                             st.download_button(
@@ -699,6 +905,24 @@ def main():
                                 help="Resultado exatamente como processado pela LLM, sem formatação",
                                 key="download_raw_single"
                             )
+                        
+                        with col5:
+                            # Formato Minuta - Legal document format
+                            minuta_doc = create_minuta_doc(
+                                content_dict=result,
+                                is_batch=False
+                            )
+                            minuta_buffer = BytesIO()
+                            minuta_doc.save(minuta_buffer)
+                            minuta_buffer.seek(0)
+                            st.download_button(
+                                "📄 Formato Minuta",
+                                minuta_buffer.getvalue(),
+                                file_name="minuta.doc",
+                                mime="application/msword",
+                                help="Documento formatado conforme padrão de peças processuais (fonte Times New Roman 12, espaçamento 1,5, margens padrão)",
+                                key="download_minuta_single"
+                            )
                         st.markdown('</div>', unsafe_allow_html=True)
                 else:
                     # Batch processing
@@ -707,7 +931,7 @@ def main():
                         results = process_batch_images(
                             processor,
                             image_paths,
-                            format_type,
+                            format_type_internal,
                             enable_preprocessing,
                             custom_prompt,
                             language,
@@ -758,60 +982,82 @@ def main():
                         with st.container(border=True):
                             st.subheader("💡 Estatísticas de Uso")
                             st.markdown('<div style="font-size: 11pt;">', unsafe_allow_html=True)
-                            col1, col2, col3, col4, col5 = st.columns(5)
+                            col1, col2, col3 = st.columns(3)
                             with col1:
                                 st.metric("⏱️ Tempo Total", f"{elapsed_time:.2f}s")
                             with col2:
                                 st.metric("📥 Tokens Entrada", f"{usage_stats.get('input_tokens', 0):,}")
                             with col3:
                                 st.metric("📤 Tokens Saída", f"{usage_stats.get('output_tokens', 0):,}")
-                            with col4:
-                                cost_brl = usage_stats.get('estimated_cost_brl', 0)
-                                if cost_brl > 0:
-                                    st.metric("💰 Custo (BRL)", f"R$ {cost_brl:.4f}")
-                                else:
-                                    st.metric("💰 Custo", "Gratuito")
-                            with col5:
-                                cost_usd = usage_stats.get('estimated_cost_usd', 0)
-                                if cost_usd > 0:
-                                    st.metric("💵 Custo (USD)", f"${cost_usd:.4f}")
-                                else:
-                                    st.metric("💵 USD", "-")
+                            # Cost metrics (hidden/commented)
+                            # with col4:
+                            #     cost_brl = usage_stats.get('estimated_cost_brl', 0)
+                            #     if cost_brl > 0:
+                            #         st.metric("💰 Custo (BRL)", f"R$ {cost_brl:.4f}")
+                            #     else:
+                            #         st.metric("💰 Custo", "Gratuito")
+                            # with col5:
+                            #     cost_usd = usage_stats.get('estimated_cost_usd', 0)
+                            #     if cost_usd > 0:
+                            #         st.metric("💵 Custo (USD)", f"${cost_usd:.4f}")
+                            #     else:
+                            #         st.metric("💵 USD", "-")
                             st.markdown('</div>', unsafe_allow_html=True)
 
                     # Display errors if any
                     if results.get('errors'):
-                        st.error("⚠️ Arquivos com erros:")
+                        st.markdown("""
+                        <div class="warning-highlight">
+                            <p><strong>⚠️ Atenção:</strong> Alguns arquivos apresentaram erros durante o processamento:</p>
+                        </div>
+                        """, unsafe_allow_html=True)
                         for file_path, error in results['errors'].items():
-                            st.warning(f"❌ {os.path.basename(file_path)}: {error}")
+                            st.markdown(f"""
+                            <div class="warning-highlight" style="margin-top: 0.5rem;">
+                                <p><strong>❌ {os.path.basename(file_path)}:</strong> {error}</p>
+                            </div>
+                            """, unsafe_allow_html=True)
 
                     # Display results in the selected format
                     if results.get('results'):
-                        st.subheader(f"📝 Resultados Processados ({format_type.upper()})")
-                        for file_path, text in results['results'].items():
-                            # Check if this is actually an error message
-                            if text.startswith("Error processing image:"):
-                                with st.expander(f"❌ {os.path.basename(file_path)} (Erro)", expanded=False):
-                                    st.error(text)
-                            else:
+                        # Filter out empty results
+                        valid_results = {fp: text for fp, text in results['results'].items() 
+                                       if text and text.strip() and not text.startswith("Error processing image:")}
+                        
+                        if valid_results:
+                            st.subheader(f"📝 Resultados Processados ({format_type})")
+                            for file_path, text in valid_results.items():
                                 with st.expander(f"✅ {os.path.basename(file_path)}", expanded=False):
                                     with st.container(border=True):
                                         st.markdown('<div style="font-size: 11pt;">', unsafe_allow_html=True)
-                                        if format_type == "json":
+                                        if format_type_internal == "json":
                                             try:
                                                 json_data = json.loads(text)
                                                 st.json(json_data)
                                             except:
                                                 st.code(text, language="json")
-                                        elif format_type == "text":
+                                        elif format_type_internal == "text":
                                             st.text(text)
-                                        elif format_type in ["structured", "key_value", "table"]:
+                                        elif format_type_internal in ["structured", "key_value", "table"]:
                                             st.markdown(text)
                                         else:  # markdown
                                             st.markdown(text)
                                         st.markdown('</div>', unsafe_allow_html=True)
+                        else:
+                            # All results are empty or errors
+                            st.markdown("""
+                            <div class="warning-highlight">
+                                <p><strong>⚠️ Atenção:</strong> Nenhum conteúdo válido foi extraído dos arquivos processados.</p>
+                                <p style="margin-top: 0.5rem; font-size: 0.9rem;">Todos os arquivos podem ter falhado no processamento ou não conterem texto legível. Verifique os erros acima e tente novamente.</p>
+                            </div>
+                            """, unsafe_allow_html=True)
                     else:
-                        st.warning("⚠️ Nenhum resultado foi gerado.")
+                        st.markdown("""
+                        <div class="warning-highlight">
+                            <p><strong>⚠️ Atenção:</strong> Nenhum resultado foi gerado durante o processamento.</p>
+                            <p style="margin-top: 0.5rem; font-size: 0.9rem;">Verifique se os arquivos foram carregados corretamente e tente novamente.</p>
+                        </div>
+                        """, unsafe_allow_html=True)
 
                     # Get raw results
                     try:
@@ -827,7 +1073,7 @@ def main():
                     with st.container(border=True):
                         st.markdown('<div style="font-size: 11pt;">', unsafe_allow_html=True)
                         if results.get('results'):
-                            col1, col2, col3, col4 = st.columns(4)
+                            col1, col2, col3, col4, col5 = st.columns(5)
                             
                             with col1:
                                 # JSON format
@@ -913,8 +1159,35 @@ def main():
                                     )
                                 except Exception as e:
                                     st.error(f"Erro ao gerar RAW: {e}")
+                            
+                            with col5:
+                                # Formato Minuta - Legal document format for batch
+                                try:
+                                    batch_content = {os.path.basename(fp): text for fp, text in results['results'].items()}
+                                    minuta_doc = create_minuta_doc(
+                                        content_dict=batch_content,
+                                        is_batch=True
+                                    )
+                                    minuta_buffer = BytesIO()
+                                    minuta_doc.save(minuta_buffer)
+                                    minuta_buffer.seek(0)
+                                    st.download_button(
+                                        "📄 Formato Minuta",
+                                        minuta_buffer.getvalue(),
+                                        file_name="minuta.doc",
+                                        mime="application/msword",
+                                        help="Documento formatado conforme padrão de peças processuais (fonte Times New Roman 12, espaçamento 1,5, margens padrão)",
+                                        key="download_minuta_batch"
+                                    )
+                                except Exception as e:
+                                    st.error(f"Erro ao gerar Minuta: {e}")
                         else:
-                            st.info("📝 Nenhum resultado disponível para download.")
+                            st.markdown("""
+                            <div class="warning-highlight">
+                                <p><strong>⚠️ Atenção:</strong> Nenhum resultado disponível para download.</p>
+                                <p style="margin-top: 0.5rem; font-size: 0.9rem;">Processe os arquivos primeiro para gerar resultados disponíveis para download.</p>
+                            </div>
+                            """, unsafe_allow_html=True)
                         st.markdown('</div>', unsafe_allow_html=True)
 
 if __name__ == "__main__":
