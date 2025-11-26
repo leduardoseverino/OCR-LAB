@@ -1,5 +1,6 @@
 import streamlit as st
 from ocr_processor import OCRProcessor
+from google_drive_integration import GoogleDriveManager
 import tempfile
 import os
 from PIL import Image
@@ -13,6 +14,7 @@ from docx import Document
 from docx.shared import Pt, RGBColor, Inches, Cm
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
 from docx.oxml.ns import qn
+from pathlib import Path
 
 # Page configuration
 st.set_page_config(
@@ -22,9 +24,18 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# Add Skyone logo to sidebar
+st.logo("https://skyone.solutions/wp-content/uploads/2024/12/logo-skyone-azul-scaled.webp")
+
 # Custom CSS - Anthropic Light Inspired Theme
 st.markdown("""
     <style>
+    /* Logo size adjustment */
+    [data-testid="stSidebarLogo"] img {
+        width: 130% !important;
+        max-width: 130% !important;
+    }
+    
     .stApp {
         max-width: 100%;
         padding: 1rem;
@@ -34,7 +45,7 @@ st.markdown("""
         background-color: #FFFFFF;
     }
     .stButton button {
-        background-color: #FF7A59;
+        background-color: #000000;
         color: white;
         border: none;
         border-radius: 6px;
@@ -43,8 +54,8 @@ st.markdown("""
         transition: all 0.2s;
     }
     .stButton button:hover {
-        background-color: #E66A49;
-        box-shadow: 0 2px 8px rgba(255, 122, 89, 0.3);
+        background-color: #333333;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
     }
     .stSelectbox {
         margin-bottom: 1rem;
@@ -458,195 +469,340 @@ def create_minuta_doc(content_dict, is_batch=False):
     return doc
 
 def main():
-    # Modern Streamlit-style header
-    st.markdown("""
-    <div style='
-        padding: 1.5rem 0;
-        margin-bottom: 2rem;
-        border-bottom: 2px solid #E0E0E0;
-    '>
-        <h1 style='
-            color: #1F1F1F;
-            font-size: 2.25rem;
-            font-weight: 700;
-            margin: 0 0 0.5rem 0;
-            padding: 0;
-            line-height: 1.2;
-        '>
-            🔍 OCR Vision
-        </h1>
-        <p style='
-            color: #666666;
-            font-size: 1rem;
-            margin: 0 0 1rem 0;
-            padding: 0;
-            font-weight: 500;
-        '>
-            Skyone LAB
-        </p>
-        <p style='
-            color: #4A4A4A;
-            font-size: 0.95rem;
-            margin: 0;
-            padding: 0;
-            line-height: 1.6;
-        '>
-            Uma tecnologia de visão computacional e IA para extrair e interpretar textos de documentos, imagens e PDFs com máxima acurácia. 
-            Projetado para impulsionar automações no Skyone Studio e alimentar agentes de IA com dados estruturados e confiáveis.
-        </p>
-    </div>
-    """, unsafe_allow_html=True)
+    # Header in expander
+    with st.expander("ℹ️ Sobre o Skyone OCR", expanded=False):
+        st.markdown("""
+        <div style='padding: 0.5rem 0;'>
+            <h2 style='
+                color: #1F1F1F;
+                font-size: 1.5rem;
+                font-weight: 600;
+                margin: 0 0 1rem 0;
+                padding: 0;
+            '>
+                🧾 Skyone OCR
+            </h2>
+            <p style='
+                color: #4A4A4A;
+                font-size: 0.95rem;
+                margin: 0;
+                padding: 0;
+                line-height: 1.6;
+            '>
+                Uma tecnologia de visão computacional e IA para extrair e interpretar textos de documentos, imagens e PDFs com máxima acurácia. 
+                <br><br>Projetado para impulsionar automações no Skyone Studio e alimentar agentes de IA com dados estruturados e confiáveis.
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
 
     # Sidebar controls
     with st.sidebar:
-        st.markdown("<style>.sidebar .sidebar-content { font-size: 11pt; }</style>", unsafe_allow_html=True)
-        st.header("🎮 Controles")
+        st.markdown("<style>.sidebar .sidebar-content { font-size: 8pt; }</style>", unsafe_allow_html=True)
+        st.header("Configurações IA")
         
-        # API Provider Selection
-        api_provider = st.selectbox(
-            "🔌 Provedor de API",
-            ["Google Gemini", "Ollama (Local)", "OpenAI"],
-            help="Escolha o provedor de API de visão"
-        )
-        
-        # API Key input for external providers
-        api_key = None
-        if api_provider in ["OpenAI", "Google Gemini"]:
-            api_key = st.text_input(
-                "🔑 Chave da API *",
-                type="password",
-                help=f"Insira sua chave de API do {api_provider}"
+        # AI Configuration Section
+        with st.expander("🤖 Inteligência Artificial", expanded=False):
+            # API Provider Selection
+            api_provider = st.selectbox(
+                "▪ Provedor LLM",
+                ["Google Gemini", "Ollama (Local)", "OpenAI"],
+                help="Escolha o provedor de IA para processamento"
             )
-        
-        # Model selection based on provider
-        if api_provider == "Ollama (Local)":
-            available_models = get_available_models()
-            if not available_models:
-                st.warning("Não foi possível buscar modelos do Ollama. Usando lista padrão.")
-                available_models = DEFAULT_MODELS
-            selected_model = st.selectbox(
-                "🤖 Selecionar Modelo de Visão",
-                available_models,
-                index=0,
-            )
-        elif api_provider == "OpenAI":
-            # Get OpenAI models dynamically if API key is provided
-            openai_models = get_openai_models(api_key)
-            if openai_models:
+            
+            # API Key input for external providers
+            api_key = None
+            if api_provider in ["OpenAI", "Google Gemini"]:
+                api_key = st.text_input(
+                    "▪ Chave da API",
+                    type="password",
+                    help=f"Insira sua chave de API do {api_provider}"
+                )
+            
+            # Model selection based on provider
+            if api_provider == "Ollama (Local)":
+                available_models = get_available_models()
+                if not available_models:
+                    st.warning("Não foi possível buscar modelos do Ollama. Usando lista padrão.")
+                    available_models = DEFAULT_MODELS
                 selected_model = st.selectbox(
-                    "🤖 Selecionar Modelo de Visão",
-                    openai_models,
+                    "▪ Modelo de Visão",
+                    available_models,
                     index=0,
-                    help="Modelos disponíveis na sua conta OpenAI"
+                )
+            elif api_provider == "OpenAI":
+                # Get OpenAI models dynamically if API key is provided
+                openai_models = get_openai_models(api_key)
+                if openai_models:
+                    selected_model = st.selectbox(
+                        "▪ Modelo de Visão",
+                        openai_models,
+                        index=0,
+                        help="Modelos disponíveis na sua conta OpenAI"
+                    )
+                else:
+                    st.warning("⚠️ Insira a API Key da OpenAI para ver os modelos disponíveis.")
+                    selected_model = None
+            else:  # Google Gemini
+                # Get Gemini models dynamically if API key is provided
+                gemini_models = get_gemini_models(api_key)
+                if gemini_models:
+                    selected_model = st.selectbox(
+                        "▪ Modelo de Visão",
+                        gemini_models,
+                        index=0,
+                        help="Modelos disponíveis na sua conta Google Gemini"
+                    )
+                else:
+                    st.warning("⚠️ Insira a API Key do Google Gemini para ver os modelos disponíveis.")
+                    selected_model = None
+        
+        # Output Format Section
+        with st.expander("🧾 Formato de Saída", expanded=False):
+            format_type = st.selectbox(
+                "▪ Tipo de Formato",
+                ["Markdown", "Texto", "JSON", "Estruturado", "Chave-Valor", "Tabela", "Documento do Word 97-2003"],
+                help="Escolha como deseja formatar o texto extraído"
+            )
+        
+        # Prompt Configuration Section
+        with st.expander("📄 Configuração de Prompt", expanded=False):
+            # Prompt type selection
+            prompt_type = st.selectbox(
+                "▪ Tipo de Prompt",
+                ["Automático", "Manual"],
+                help="Escolha entre prompt automático (padrão otimizado) ou manual (personalizado)"
+            )
+            
+            # Automatic prompt
+            automatic_prompt = """Siga rigorosamente as instruções abaixo para processar o conteúdo do arquivo, garantindo que o resultado final esteja formatado de maneira totalmente compatível com Microsoft Word Document 97–2004 (.doc):
+
+1. Transcrição Integral e Fiel
+
+Transcreva o conteúdo completo, mantendo a estrutura, ordem e organização visual com a maior fidelidade possível ao documento original.
+
+2. Correção Automática de OCR
+
+Corrija apenas erros evidentes de leitura, como:
+• caracteres distorcidos;
+• letras ou sinais faltando;
+• palavras quebradas;
+• acentuação/ortografia claramente afetadas pelo OCR.
+
+3. Marcação de Ilegibilidade
+
+Se um trecho estiver ausente, ilegível ou incerto, marque TRECHO ILEGÍVEL exatamente onde ocorre.
+Nunca reordene o conteúdo para esconder falhas.
+
+4. Sem Inferências
+
+Não preencha lacunas com suposições.
+Use TRECHO ILEGÍVEL sempre que a leitura não for 100% segura.
+
+5. Reconstrução de Estruturas
+
+Caso o documento contenha tabelas, quadros, fichas, formulários, listas ou campos pré-definidos, reconstrua utilizando:
+• tabelas simples compatíveis com Word 97–2004;
+• listas numeradas ou com marcadores;
+• separação clara de seções;
+• títulos simples.
+
+🔗 Evitar: caixas de texto avançadas, ícones, figuras inline modernas, tabelas complexas ou recursos não suportados pelo formato .doc.
+
+6. Seção Final — Extração de Campos Estruturados
+
+Após a transcrição completa, apresente uma seção separada contendo:
+• campos identificados;
+• valores extraídos;
+• marcações TRECHO ILEGÍVEL quando necessário.
+
+Use uma tabela simples ou lista compatível com Word 97–2004 (.doc).
+
+7. Compatibilidade com Word 97–2004 (.doc)
+
+Todo o conteúdo deve utilizar apenas formatação legada:
+• tabelas simples;
+• listas simples;
+• negrito, itálico e sublinhado básicos;
+• seções com títulos;
+• nada de estilos avançados, emojis, cores especiais ou elementos modernos."""
+            
+            # Custom prompt input (conditional)
+            if prompt_type == "Manual":
+                custom_prompt_input = st.text_area(
+                    "▪ Prompt Personalizado",
+                    value="",
+                    placeholder="Digite seu prompt aqui (obrigatório)",
+                    help="Insira um prompt personalizado para extração de texto. Este campo é obrigatório.",
+                    height=200
                 )
             else:
-                st.warning("⚠️ Insira a API Key da OpenAI para ver os modelos disponíveis.")
-                selected_model = None
-        else:  # Google Gemini
-            # Get Gemini models dynamically if API key is provided
-            gemini_models = get_gemini_models(api_key)
-            if gemini_models:
-                selected_model = st.selectbox(
-                    "🤖 Selecionar Modelo de Visão",
-                    gemini_models,
-                    index=0,
-                    help="Modelos disponíveis na sua conta Google Gemini"
+                custom_prompt_input = automatic_prompt
+                st.text_area(
+                    "▪ Prompt Automático",
+                    value=automatic_prompt,
+                    help="Prompt automático otimizado para OCR com correção e marcação de ilegibilidade",
+                    height=200,
+                    disabled=True
                 )
+        
+        st.markdown("<style>.sidebar .sidebar-content { font-size: 8pt; }</style>", unsafe_allow_html=True)
+        st.header("Configurações Avançadas")
+        # Advanced Settings
+        with st.expander("⚙️ Configurações Avançadas", expanded=False):
+            preprocessing_option = st.selectbox(
+                "▪ Pré-processamento",
+                options=["Ativado", "Desativado"],
+                index=0,  # Default "Ativado"
+                help="Aplicar aprimoramento e pré-processamento de imagem"
+            )
+            enable_preprocessing = preprocessing_option == "Ativado"
+            
+            language = st.text_input(
+                "▪ Idioma",
+                value="pt-br",
+                help="Insira o idioma do texto na imagem (ex: pt-br para Português, en para Inglês)."
+            )
+
+            max_workers = st.selectbox(
+                "▪ Processamento Paralelo",
+                options=[1, 2, 3, 4, 5, 6, 7, 8],
+                index=1,  # Default value 2
+                help="Número de imagens a processar em paralelo (para processamento em lote)"
+            )
+            
+            st.divider()
+            
+            # Google Drive Integration Section
+            st.markdown("**▪ Google Drive**")
+            
+            # Initialize Google Drive Manager in session state
+            if 'gdrive_manager' not in st.session_state:
+                st.session_state['gdrive_manager'] = GoogleDriveManager()
+            
+            gdrive_manager = st.session_state['gdrive_manager']
+            
+            # Check authentication status
+            is_authenticated = gdrive_manager.is_authenticated()
+            
+            if not is_authenticated:
+                st.info("Conecte-se ao Google Drive para processar arquivos diretamente da nuvem")
+                if st.button("Conectar ao Google Drive", use_container_width=True):
+                    with st.spinner("Autenticando com Google Drive..."):
+                        try:
+                            if gdrive_manager.authenticate():
+                                st.success("✅ Conectado ao Google Drive!")
+                                st.rerun()
+                            else:
+                                st.error("❌ Falha na autenticação. Verifique se o arquivo credentials.json está presente.")
+                        except FileNotFoundError as e:
+                            st.error(f"❌ {str(e)}")
+                            st.info("Para usar o Google Drive, você precisa:\n"
+                                   "1. Criar um projeto no Google Cloud Console\n"
+                                   "2. Ativar a Google Drive API\n"
+                                   "3. Baixar credentials.json\n"
+                                   "4. Colocar o arquivo na raiz do projeto")
             else:
-                st.warning("⚠️ Insira a API Key do Google Gemini para ver os modelos disponíveis.")
-                selected_model = None
+                st.success("✅ Conectado ao Google Drive")
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button("Atualizar", use_container_width=True):
+                        st.rerun()
+                with col2:
+                    if st.button("Desconectar", use_container_width=True):
+                        gdrive_manager.delete_credentials()
+                        st.session_state['gdrive_manager'] = GoogleDriveManager()
+                        st.session_state['selected_folder_id'] = None
+                        st.session_state['selected_folder_name'] = None
+                        st.success("Desconectado do Google Drive")
+                        st.rerun()
+                
+                # Folder selection
+                st.markdown("**Selecionar Pasta:**")
+                
+                # Initialize folder selection in session state
+                if 'selected_folder_id' not in st.session_state:
+                    st.session_state['selected_folder_id'] = None
+                if 'selected_folder_name' not in st.session_state:
+                    st.session_state['selected_folder_name'] = None
+                if 'current_parent_id' not in st.session_state:
+                    st.session_state['current_parent_id'] = None
+                
+                # Get folders
+                try:
+                    folders = gdrive_manager.list_folders(st.session_state['current_parent_id'])
+                    
+                    # Show current path
+                    if st.session_state['current_parent_id']:
+                        current_path = gdrive_manager.get_folder_path(st.session_state['current_parent_id'])
+                        st.caption(f"▪ {current_path}")
+                        if st.button("Voltar", use_container_width=True):
+                            # Get parent of current folder
+                            try:
+                                file = gdrive_manager.service.files().get(
+                                    fileId=st.session_state['current_parent_id'],
+                                    fields='parents'
+                                ).execute()
+                                parents = file.get('parents', [])
+                                st.session_state['current_parent_id'] = parents[0] if parents else None
+                                st.rerun()
+                            except:
+                                st.session_state['current_parent_id'] = None
+                                st.rerun()
+                    else:
+                        st.caption("▪ Meu Drive (Raiz)")
+                    
+                    if folders:
+                        # Display folders
+                        for folder in folders:
+                            col1, col2 = st.columns([3, 1])
+                            with col1:
+                                if st.button(f"▪ {folder['name']}", key=f"nav_{folder['id']}", use_container_width=True):
+                                    st.session_state['current_parent_id'] = folder['id']
+                                    st.rerun()
+                            with col2:
+                                if st.button("✓", key=f"sel_{folder['id']}", help="Selecionar esta pasta"):
+                                    st.session_state['selected_folder_id'] = folder['id']
+                                    st.session_state['selected_folder_name'] = folder['name']
+                                    st.success(f"Pasta selecionada: {folder['name']}")
+                                    st.rerun()
+                    else:
+                        st.info("Nenhuma pasta encontrada neste local")
+                    
+                    # Show selected folder
+                    if st.session_state['selected_folder_id']:
+                        st.divider()
+                        st.success(f"▪ Pasta Selecionada:\n**{st.session_state['selected_folder_name']}**")
+                        
+                        # Show files in selected folder
+                        with st.expander("▪ Arquivos na pasta", expanded=False):
+                            files = gdrive_manager.list_files_in_folder(
+                                st.session_state['selected_folder_id'],
+                                file_extensions=['.png', '.jpg', '.jpeg', '.pdf', '.tiff', '.bmp']
+                            )
+                            if files:
+                                st.write(f"**{len(files)} arquivo(s) encontrado(s):**")
+                                for file in files:
+                                    size_mb = int(file.get('size', 0)) / (1024 * 1024)
+                                    st.caption(f"• {file['name']} ({size_mb:.2f} MB)")
+                            else:
+                                st.info("Nenhum arquivo de imagem ou PDF encontrado")
+                                
+                except Exception as e:
+                    st.error(f"Erro ao listar pastas: {str(e)}")
         
-        format_type = st.selectbox(
-            "📄 Formato de Saída",
-            ["Markdown", "Texto", "JSON", "Estruturado", "Chave-Valor", "Tabela"],
-            help="Escolha como deseja formatar o texto extraído"
-        )
+        st.markdown("<style>.sidebar .sidebar-content { font-size: 8pt; }</style>", unsafe_allow_html=True)
+        st.header("Resultados")
         
-        # Prompt type selection
-        prompt_type = st.selectbox(
-            "📝 Tipo de Prompt",
-            ["Manual", "Automático"],
-            help="Escolha entre prompt manual (personalizado) ou automático (padrão otimizado)"
-        )
-        
-        # Automatic prompt
-        automatic_prompt = """Siga as instruções abaixo para processar o conteúdo do arquivo:
-
-1. Transcrição Integral e Fiel: Leia o arquivo e transcreva o conteúdo integral, mantendo o máximo de fidelidade possível ao formato e à estrutura do documento original.
-
-2. Correção Automática de OCR: Corrija automaticamente erros evidentes de reconhecimento de texto (OCR), como:
-
-• Caracteres trocados ou distorcidos.
-
-• Letras ou pontuações faltando.
-
-• Palavras fragmentadas (unir).
-
-• Acentuação ou ortografia incorreta.
-
-3. Marcação de Ilegibilidade: Quando um trecho esperado não puder ser lido, estiver ilegível, ausente ou houver incerteza sobre a informação, utilize a marcação textual [TRECHO ILEGÍVEL] imediatamente no local exato onde a falha ocorreu.
-
-4. Não Invente Informações: Não invente ou deduza conteúdo para preencher as lacunas. A marcação [TRECHO ILEGÍVEL] deve ser usada sempre que a leitura for incerta ou impossível.
-
-5. Reconstrução de Estruturas: Se detectar tabelas, quadros ou campos pré-definidos, reconstrua-os de forma limpa e legível utilizando formatação de texto (tabelas em Markdown ou listas) para manter a organização dos dados.
-
-6. Extração de Campos: Após a transcrição completa, apresente uma seção separada com a extração de campos e tópicos chave, formatada em formato de lista ou tabela."""
-        
-        # Custom prompt input (conditional)
-        if prompt_type == "Manual":
-            custom_prompt_input = st.text_area(
-                "📝 Prompt Personalizado *",
-                value="",
-                placeholder="Digite seu prompt aqui (obrigatório)",
-                help="Insira um prompt personalizado para extração de texto. Este campo é obrigatório.",
-                height=200
-            )
-        else:
-            custom_prompt_input = automatic_prompt
-            st.text_area(
-                "📝 Prompt Automático",
-                value=automatic_prompt,
-                help="Prompt automático otimizado para OCR com correção e marcação de ilegibilidade",
-                height=200,
-                disabled=True
-            )
-
-        language = st.text_input(
-            "🌍 Idioma",
-            value="pt-br",
-            help="Insira o idioma do texto na imagem (ex: pt-br para Português, en para Inglês)."
-        )
-
-        max_workers = st.selectbox(
-            "🔄 Processamento Paralelo",
-            options=[1, 2, 3, 4, 5, 6, 7, 8],
-            index=1,  # Default value 2
-            help="Número de imagens a processar em paralelo (para processamento em lote)"
-        )
-
-        preprocessing_option = st.selectbox(
-            "🔍 Pré-processamento",
-            options=["Ativado", "Desativado"],
-            index=0,  # Default "Ativado"
-            help="Aplicar aprimoramento e pré-processamento de imagem"
-        )
-        enable_preprocessing = preprocessing_option == "Ativado"
-        
-        # Model info box
-        if selected_model == "llava:7b":
-            st.info("LLaVA 7B: Modelo de visão-linguagem eficiente otimizado para processamento em tempo real")
-        elif selected_model == "llama3.2-vision:11b":
-            st.info("Llama 3.2 Vision: Modelo avançado com alta precisão para extração de texto complexo")
-        elif selected_model == "granite3.2-vision":
-            st.info("Granite 3.2 Vision: Modelo robusto para análise detalhada de documentos")
-        elif selected_model == "moondream":
-            st.info("Moondream: Modelo leve projetado para dispositivos de borda")
-        
-        # Exchange rate info (hidden/commented)
-        # st.divider()
-        # st.caption("💱 Taxa de Câmbio: USD 1.00 = R$ 6.10")
-        # st.caption("📊 Custos calculados automaticamente para cada processamento")
-        
+        # Download Results Section
+        with st.expander("📥 Download de Resultados", expanded=False):
+            # Placeholder for download options
+            if 'download_placeholder' not in st.session_state:
+                st.session_state['download_placeholder'] = st.empty()
+            
+            with st.session_state['download_placeholder'].container():
+                st.info("Processe arquivos para ver as opções de download")
+    
     
     # Map translated format names to internal format values
     format_map = {
@@ -655,7 +811,8 @@ def main():
         "JSON": "json",
         "Estruturado": "structured",
         "Chave-Valor": "key_value",
-        "Tabela": "table"
+        "Tabela": "table",
+        "Documento do Word 97-2003": "doc97"
     }
     format_type_internal = format_map.get(format_type, "markdown")
     
@@ -681,24 +838,92 @@ def main():
             api_key=api_key
         )
     except ValueError as e:
-        st.error(f"⚠️ Configuration Error: {str(e)}")
+        with st.expander("ℹ️ Aguardando Configuração", expanded=True):
+            st.markdown("""
+            <div style="
+                background-color: #E3F2FD;
+                border-left: 4px solid #2196F3;
+                padding: 1rem 1.5rem;
+                margin: 1rem 0;
+                border-radius: 6px;
+                box-shadow: 0 2px 4px rgba(33, 150, 243, 0.2);
+            ">
+                <p style="
+                    color: #1565C0;
+                    font-weight: 500;
+                    margin: 0;
+                    font-size: 0.95rem;
+                    line-height: 1.5;
+                ">
+                    <strong>ℹ️ Aguardando Modelo de Inteligência Artificial</strong><br/>
+                    Por favor, configure o modelo de IA na barra lateral para continuar.
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
         st.stop()
 
-    # Upload container
-    with st.container(border=True):
-        st.subheader("📤 Upload de Arquivos")
-        uploaded_files = st.file_uploader(
-            "Arraste seus arquivos aqui",
-            type=['png', 'jpg', 'jpeg', 'tiff', 'bmp', 'pdf'],
-            accept_multiple_files=True,
-            help="Formatos suportados: PNG, JPG, JPEG, TIFF, BMP, PDF"
-        )
-        
-        # Botão de processar dentro do box de upload
-        if uploaded_files:
-            st.divider()
-            if st.button("🚀 Processar Arquivo", key="process_button", use_container_width=True):
-                st.session_state['process_clicked'] = True
+    # Source selection tabs
+    source_tab1, source_tab2 = st.tabs(["📤 Upload Local", "☁️ Google Drive"])
+    
+    uploaded_files = None
+    process_from_gdrive = False
+    
+    with source_tab1:
+        # Upload container
+        with st.container(border=True):
+            st.subheader("📤 Upload de Arquivos")
+            uploaded_files = st.file_uploader(
+                "Arraste seus arquivos aqui",
+                type=['png', 'jpg', 'jpeg', 'tiff', 'bmp', 'pdf'],
+                accept_multiple_files=True,
+                help="Formatos suportados: PNG, JPG, JPEG, TIFF, BMP, PDF"
+            )
+            
+            # Botão de processar dentro do box de upload
+            if uploaded_files:
+                st.divider()
+                st.write(f"**{len(uploaded_files)} arquivo(s) carregado(s):**")
+                for uploaded_file in uploaded_files:
+                    file_size = uploaded_file.size / (1024 * 1024)  # Convert to MB
+                    st.write(f"✓ {uploaded_file.name} ({file_size:.2f} MB)")
+                st.divider()
+                if st.button("🚀 Processar Arquivos Locais", key="process_button_local", use_container_width=True):
+                    st.session_state['process_clicked'] = True
+    
+    with source_tab2:
+        # Google Drive processing
+        with st.container(border=True):
+            st.subheader("☁️ Processar do Google Drive")
+            
+            if not gdrive_manager.is_authenticated():
+                st.warning("⚠️ Conecte-se ao Google Drive na barra lateral para usar esta opção")
+            elif not st.session_state.get('selected_folder_id'):
+                st.info("📁 Selecione uma pasta do Google Drive na barra lateral")
+            else:
+                st.success(f"📂 Pasta selecionada: **{st.session_state['selected_folder_name']}**")
+                
+                # Get files from selected folder
+                try:
+                    gdrive_files = gdrive_manager.list_files_in_folder(
+                        st.session_state['selected_folder_id'],
+                        file_extensions=['.png', '.jpg', '.jpeg', '.pdf', '.tiff', '.bmp']
+                    )
+                    
+                    if gdrive_files:
+                        st.write(f"**{len(gdrive_files)} arquivo(s) encontrado(s):**")
+                        for file in gdrive_files:
+                            size_mb = int(file.get('size', 0)) / (1024 * 1024)
+                            st.caption(f"• {file['name']} ({size_mb:.2f} MB)")
+                        
+                        st.divider()
+                        if st.button("🚀 Processar Arquivos do Google Drive", key="process_button_gdrive", use_container_width=True):
+                            st.session_state['process_clicked_gdrive'] = True
+                            process_from_gdrive = True
+                    else:
+                        st.warning("⚠️ Nenhum arquivo de imagem ou PDF encontrado na pasta selecionada")
+                        
+                except Exception as e:
+                    st.error(f"❌ Erro ao listar arquivos: {str(e)}")
 
     if uploaded_files:
         # Create a temporary directory for uploaded files
@@ -829,6 +1054,8 @@ def main():
                                 except:
                                     st.code(result, language="json")
                             elif format_type_internal == "text":
+                                st.text(result)
+                            elif format_type_internal == "doc97":
                                 st.text(result)
                             elif format_type_internal in ["structured", "key_value", "table"]:
                                 st.markdown(result)
@@ -1027,7 +1254,7 @@ def main():
                         if valid_results:
                             st.subheader(f"📝 Resultados Processados ({format_type})")
                             for file_path, text in valid_results.items():
-                                with st.expander(f"✅ {os.path.basename(file_path)}", expanded=False):
+                                with st.expander(f"✅ {os.path.basename(file_path)}", expanded=True):
                                     with st.container(border=True):
                                         st.markdown('<div style="font-size: 11pt;">', unsafe_allow_html=True)
                                         if format_type_internal == "json":
@@ -1037,6 +1264,8 @@ def main():
                                             except:
                                                 st.code(text, language="json")
                                         elif format_type_internal == "text":
+                                            st.text(text)
+                                        elif format_type_internal == "doc97":
                                             st.text(text)
                                         elif format_type_internal in ["structured", "key_value", "table"]:
                                             st.markdown(text)
@@ -1189,6 +1418,256 @@ def main():
                             </div>
                             """, unsafe_allow_html=True)
                         st.markdown('</div>', unsafe_allow_html=True)
+    
+    # Google Drive Processing Section
+    if st.session_state.get('process_clicked_gdrive', False) and gdrive_manager.is_authenticated() and st.session_state.get('selected_folder_id'):
+        # Reset flag
+        st.session_state['process_clicked_gdrive'] = False
+        
+        # Validate custom prompt
+        if prompt_type == "Manual" and not custom_prompt:
+            st.error("⚠️ Prompt Personalizado é obrigatório. Por favor, insira um prompt antes de processar.")
+            st.stop()
+        
+        try:
+            # Get files from Google Drive
+            gdrive_files = gdrive_manager.list_files_in_folder(
+                st.session_state['selected_folder_id'],
+                file_extensions=['.png', '.jpg', '.jpeg', '.pdf', '.tiff', '.bmp']
+            )
+            
+            if not gdrive_files:
+                st.warning("⚠️ Nenhum arquivo encontrado na pasta selecionada")
+                st.stop()
+            
+            st.info(f"📂 Processando {len(gdrive_files)} arquivo(s) do Google Drive...")
+            
+            # Create temporary directory for downloaded files
+            with tempfile.TemporaryDirectory() as temp_dir:
+                # Download files from Google Drive
+                image_paths = []
+                download_progress = st.progress(0)
+                download_status = st.empty()
+                
+                for idx, file in enumerate(gdrive_files):
+                    download_status.text(f"📥 Baixando {file['name']}... ({idx + 1}/{len(gdrive_files)})")
+                    temp_path = os.path.join(temp_dir, file['name'])
+                    
+                    if gdrive_manager.download_file(file['id'], temp_path):
+                        image_paths.append(temp_path)
+                    else:
+                        st.warning(f"⚠️ Falha ao baixar: {file['name']}")
+                    
+                    download_progress.progress((idx + 1) / len(gdrive_files))
+                
+                download_progress.empty()
+                download_status.empty()
+                
+                if not image_paths:
+                    st.error("❌ Nenhum arquivo foi baixado com sucesso")
+                    st.stop()
+                
+                st.success(f"✅ {len(image_paths)} arquivo(s) baixado(s) com sucesso!")
+                
+                # Reset usage stats before processing
+                try:
+                    processor.reset_usage_stats()
+                except Exception as e:
+                    st.warning(f"Aviso ao resetar estatísticas: {e}")
+                
+                # Create timer and status components
+                timer_container = st.empty()
+                status_text = st.empty()
+                
+                start_time = time.time()
+                
+                # Process files
+                status_text.text("Iniciando processamento...")
+                results = process_batch_images(
+                    processor,
+                    image_paths,
+                    format_type_internal,
+                    enable_preprocessing,
+                    custom_prompt,
+                    language,
+                    status_text,
+                    timer_container
+                )
+                
+                # Show final time
+                elapsed_time = time.time() - start_time
+                timer_container.empty()
+                status_text.empty()
+                
+                # Get usage statistics
+                try:
+                    usage_stats = processor.get_usage_stats()
+                except Exception as e:
+                    st.warning(f"Aviso ao obter estatísticas: {e}")
+                    usage_stats = {
+                        'input_tokens': 0,
+                        'output_tokens': 0,
+                        'estimated_cost_brl': 0,
+                        'estimated_cost_usd': 0
+                    }
+                
+                st.success(f"✅ Processamento concluído em {elapsed_time:.2f}s!")
+                
+                # Display statistics
+                col_stat1, col_stat2 = st.columns(2)
+                
+                with col_stat1:
+                    with st.container(border=True):
+                        st.subheader("📊 Estatísticas de Processamento")
+                        st.markdown('<div style="font-size: 11pt;">', unsafe_allow_html=True)
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.metric("Total de Imagens", results.get('statistics', {}).get('total', 0))
+                        with col2:
+                            st.metric("Sucesso", results.get('statistics', {}).get('successful', 0))
+                        with col3:
+                            st.metric("Falhas", results.get('statistics', {}).get('failed', 0))
+                        st.markdown('</div>', unsafe_allow_html=True)
+                
+                with col_stat2:
+                    with st.container(border=True):
+                        st.subheader("💡 Estatísticas de Uso")
+                        st.markdown('<div style="font-size: 11pt;">', unsafe_allow_html=True)
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.metric("⏱️ Tempo Total", f"{elapsed_time:.2f}s")
+                        with col2:
+                            st.metric("📥 Tokens Entrada", f"{usage_stats.get('input_tokens', 0):,}")
+                        with col3:
+                            st.metric("📤 Tokens Saída", f"{usage_stats.get('output_tokens', 0):,}")
+                        st.markdown('</div>', unsafe_allow_html=True)
+                
+                # Display errors if any
+                if results.get('errors'):
+                    st.markdown("""
+                    <div class="warning-highlight">
+                        <p><strong>⚠️ Atenção:</strong> Alguns arquivos apresentaram erros durante o processamento:</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    for file_path, error in results['errors'].items():
+                        st.markdown(f"""
+                        <div class="warning-highlight" style="margin-top: 0.5rem;">
+                            <p><strong>❌ {os.path.basename(file_path)}:</strong> {error}</p>
+                        </div>
+                        """, unsafe_allow_html=True)
+                
+                # Display results
+                if results.get('results'):
+                    valid_results = {fp: text for fp, text in results['results'].items() 
+                                   if text and text.strip() and not text.startswith("Error processing image:")}
+                    
+                    if valid_results:
+                        st.subheader(f"📝 Resultados Processados ({format_type})")
+                        for file_path, text in valid_results.items():
+                            with st.expander(f"✅ {os.path.basename(file_path)}", expanded=True):
+                                with st.container(border=True):
+                                    st.markdown('<div style="font-size: 11pt;">', unsafe_allow_html=True)
+                                    if format_type_internal == "json":
+                                        try:
+                                            json_data = json.loads(text)
+                                            st.json(json_data)
+                                        except:
+                                            st.code(text, language="json")
+                                    elif format_type_internal == "text":
+                                        st.text(text)
+                                    elif format_type_internal == "doc97":
+                                        st.text(text)
+                                    elif format_type_internal in ["structured", "key_value", "table"]:
+                                        st.markdown(text)
+                                    else:  # markdown
+                                        st.markdown(text)
+                                    st.markdown('</div>', unsafe_allow_html=True)
+                        
+                        # Upload results back to Google Drive
+                        st.subheader("☁️ Salvando Resultados no Google Drive")
+                        upload_progress = st.progress(0)
+                        upload_status = st.empty()
+                        
+                        uploaded_count = 0
+                        total_to_upload = len(valid_results)
+                        
+                        # Create temporary files for each result and upload
+                        for idx, (file_path, text) in enumerate(valid_results.items()):
+                            original_name = os.path.basename(file_path)
+                            base_name = os.path.splitext(original_name)[0]
+                            
+                            # Determine file extension based on format
+                            if format_type_internal == "json":
+                                ext = ".json"
+                                content = text
+                            elif format_type_internal in ["doc97"]:
+                                ext = ".doc"
+                                # Create DOC file
+                                doc = create_structured_docx(
+                                    title=f'Resultado OCR - {original_name}',
+                                    content_dict=text,
+                                    model_name=selected_model,
+                                    format_type=format_type,
+                                    language=language,
+                                    is_batch=False
+                                )
+                                doc_buffer = BytesIO()
+                                doc.save(doc_buffer)
+                                content = doc_buffer.getvalue()
+                            else:
+                                ext = ".txt"
+                                content = text
+                            
+                            result_filename = f"{base_name}_resultado{ext}"
+                            
+                            # Save to temporary file
+                            temp_result_path = os.path.join(temp_dir, result_filename)
+                            
+                            if isinstance(content, bytes):
+                                with open(temp_result_path, 'wb') as f:
+                                    f.write(content)
+                            else:
+                                with open(temp_result_path, 'w', encoding='utf-8') as f:
+                                    f.write(content)
+                            
+                            # Upload to Google Drive
+                            upload_status.text(f"📤 Enviando {result_filename}... ({idx + 1}/{total_to_upload})")
+                            
+                            file_id = gdrive_manager.upload_file(
+                                temp_result_path,
+                                st.session_state['selected_folder_id'],
+                                result_filename
+                            )
+                            
+                            if file_id:
+                                uploaded_count += 1
+                            else:
+                                st.warning(f"⚠️ Falha ao enviar: {result_filename}")
+                            
+                            upload_progress.progress((idx + 1) / total_to_upload)
+                        
+                        upload_progress.empty()
+                        upload_status.empty()
+                        
+                        st.success(f"✅ {uploaded_count} arquivo(s) enviado(s) para o Google Drive!")
+                        st.info(f"📂 Os resultados foram salvos na pasta: **{st.session_state['selected_folder_name']}**")
+                    else:
+                        st.markdown("""
+                        <div class="warning-highlight">
+                            <p><strong>⚠️ Atenção:</strong> Nenhum conteúdo válido foi extraído dos arquivos processados.</p>
+                        </div>
+                        """, unsafe_allow_html=True)
+                else:
+                    st.markdown("""
+                    <div class="warning-highlight">
+                        <p><strong>⚠️ Atenção:</strong> Nenhum resultado foi gerado durante o processamento.</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+        except Exception as e:
+            st.error(f"❌ Erro no processamento do Google Drive: {str(e)}")
+            import traceback
+            st.code(traceback.format_exc())
 
 if __name__ == "__main__":
     main()

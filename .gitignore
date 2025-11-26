@@ -46,6 +46,10 @@ output/
 *.pypirc
 .streamlit/secrets.toml
 
+# Google Drive API credentials (NEVER COMMIT THESE!)
+credentials.json
+token.pickle
+
 # Jupyter
 .ipynb_checkpoints/
 *.ipynb

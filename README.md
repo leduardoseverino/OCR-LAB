@@ -28,12 +28,14 @@ Esta tecnologia foi desenvolvida para:
 ## 🚀 Principais Funcionalidades
 
 - ✅ **Múltiplos Provedores de IA**: Ollama (local), OpenAI e Google Gemini
+- ✅ **Integração com Google Drive**: Processe arquivos diretamente da nuvem
 - ✅ **Processamento em Lote**: Múltiplos arquivos simultaneamente
 - ✅ **Formatos Suportados**: PNG, JPG, JPEG, TIFF, BMP e PDF
 - ✅ **Pré-processamento Inteligente**: Melhoria automática de imagem
-- ✅ **Formatos de Saída**: Markdown, Texto, JSON, Estruturado, Chave-Valor, Tabela
+- ✅ **Formatos de Saída**: Markdown, Texto, JSON, Estruturado, Chave-Valor, Tabela, Word 97-2003
 - ✅ **Formato Minuta**: Geração de documentos no padrão de peças processuais
 - ✅ **Interface Moderna**: UI intuitiva e responsiva
+- ✅ **Salvamento Automático**: Resultados salvos diretamente no Google Drive
 
 ---
 
@@ -108,6 +110,38 @@ A aplicação abrirá automaticamente em `http://localhost:8501`
 ### Google Gemini
 1. Obtenha sua API key em: https://makersuite.google.com/app/apikey
 2. Insira a key no campo "Chave da API" quando selecionar Google Gemini
+
+---
+
+## ☁️ Integração com Google Drive
+
+O OCR Vision agora suporta processamento direto de arquivos do Google Drive!
+
+### 🎯 Funcionalidades
+
+- **Navegação de Pastas**: Navegue pelas pastas do seu Google Drive
+- **Seleção Intuitiva**: Selecione a pasta com os arquivos para processar
+- **Download Automático**: Arquivos são baixados temporariamente para processamento
+- **Upload Automático**: Resultados são salvos automaticamente na mesma pasta
+- **Segurança**: Autenticação OAuth 2.0 segura
+
+### 📖 Como Configurar
+
+Para usar a integração com Google Drive, siga o guia completo de configuração:
+
+👉 **[GOOGLE_DRIVE_SETUP.md](GOOGLE_DRIVE_SETUP.md)**
+
+### 🚀 Início Rápido
+
+1. Configure as credenciais do Google Drive (veja guia acima)
+2. Inicie o aplicativo
+3. Na barra lateral, clique em **"🔐 Conectar ao Google Drive"**
+4. Autorize o acesso
+5. Navegue e selecione uma pasta
+6. Vá para a aba **"☁️ Google Drive"**
+7. Clique em **"🚀 Processar Arquivos do Google Drive"**
+
+Os resultados serão salvos automaticamente na mesma pasta!
 
 ---
 

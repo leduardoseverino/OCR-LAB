@@ -523,6 +523,13 @@ class OCRProcessor:
                                 - Output the table in a structured format such as Markdown, CSV, or JSON, based on the intended use.
                                 """,
 
+                            "doc97": f"""Extract all visible text from this image in {language} **without any changes**.
+                                - **Do not summarize, paraphrase, or infer missing text.**
+                                - Retain all spacing, punctuation, and formatting exactly as in the image.
+                                - If text is unclear or partially visible, extract as much as possible without guessing.
+                                - **Include all text, even if it seems irrelevant or repeated.**
+                                - Format the output as plain text suitable for a Word 97-2003 document.
+                                """,
 
                         }
                         prompt = prompts.get(format_type, prompts["text"])
@@ -607,6 +614,14 @@ class OCRProcessor:
                                 - Maintain all numerical, textual, and special character formatting.
                                 - If the table contains merged cells, indicate them clearly without altering their meaning.
                                 - Output the table in a structured format such as Markdown, CSV, or JSON, based on the intended use.
+                                """,
+
+                            "doc97": f"""Extract all visible text from this image in {language} **without any changes**.
+                                - **Do not summarize, paraphrase, or infer missing text.**
+                                - Retain all spacing, punctuation, and formatting exactly as in the image.
+                                - If text is unclear or partially visible, extract as much as possible without guessing.
+                                - **Include all text, even if it seems irrelevant or repeated.**
+                                - Format the output as plain text suitable for a Word 97-2003 document.
                                 """,
                 }
                 prompt = prompts.get(format_type, prompts["text"])
