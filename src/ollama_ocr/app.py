@@ -1,6 +1,5 @@
 import streamlit as st
 from ocr_processor import OCRProcessor
-from google_drive_integration import GoogleDriveManager
 import tempfile
 import os
 from PIL import Image
@@ -278,6 +277,126 @@ def process_batch_images(processor, image_paths, format_type, enable_preprocessi
         return results
     except Exception as e:
         return {"error": str(e)}
+
+def get_files_from_folder(folder_path, recursive=False):
+    """Get all supported image/PDF files from a folder"""
+    supported_extensions = ['.png', '.jpg', '.jpeg', '.tiff', '.bmp', '.pdf']
+    image_paths = []
+    
+    folder_path = Path(folder_path)
+    
+    if not folder_path.exists():
+        return []
+    
+    if not folder_path.is_dir():
+        return []
+    
+    if recursive:
+        # Recursive search
+        for ext in supported_extensions:
+            image_paths.extend(folder_path.rglob(f'*{ext}'))
+            image_paths.extend(folder_path.rglob(f'*{ext.upper()}'))
+    else:
+        # Non-recursive search
+        for ext in supported_extensions:
+            image_paths.extend(folder_path.glob(f'*{ext}'))
+            image_paths.extend(folder_path.glob(f'*{ext.upper()}'))
+    
+    # Convert to strings and remove duplicates
+    return list(set([str(p) for p in image_paths]))
+
+def validate_file_path(file_path):
+    """Validate if a file path exists and is a supported format"""
+    supported_extensions = ['.png', '.jpg', '.jpeg', '.tiff', '.bmp', '.pdf']
+    
+    file_path = Path(file_path)
+    
+    if not file_path.exists():
+        return False, "Arquivo não encontrado"
+    
+    if not file_path.is_file():
+        return False, "Caminho não é um arquivo"
+    
+    if file_path.suffix.lower() not in supported_extensions:
+        return False, f"Formato não suportado. Formatos aceitos: {', '.join(supported_extensions)}"
+    
+    return True, "OK"
+
+def save_processed_file(original_file_path, result_text, save_dir, format_type_internal, 
+                       selected_model, format_type, language, elapsed_time=None, is_batch=False):
+    """Save a processed file to the specified directory - always saves as Word document"""
+    try:
+        # Create directory if it doesn't exist
+        save_path = Path(save_dir)
+        save_path.mkdir(parents=True, exist_ok=True)
+        
+        # Get original file name without extension
+        original_name = Path(original_file_path).stem
+        
+        # Always save as Word document (DOCX format)
+        ext = ".docx"
+        
+        # Convert result_text to dict format expected by create_structured_docx
+        # The function expects content_dict to be a dict with file names as keys and content as values
+        if is_batch:
+            # For batch, result_text should already be a dict-like structure
+            if isinstance(result_text, dict):
+                content_dict = result_text
+            else:
+                # If it's a string, wrap it in a dict
+                content_dict = {Path(original_file_path).name: result_text}
+        else:
+            # For single file, create a simple dict structure
+            content_dict = {Path(original_file_path).name: result_text}
+        
+        # Create Word document
+        doc = create_structured_docx(
+            title=f'Resultado OCR - {Path(original_file_path).name}',
+            content_dict=content_dict,
+            model_name=selected_model,
+            format_type=format_type,
+            language=language,
+            elapsed_time=elapsed_time,
+            is_batch=is_batch
+        )
+        
+        # Save to buffer
+        doc_buffer = BytesIO()
+        doc.save(doc_buffer)
+        content = doc_buffer.getvalue()
+        
+        # Create output file path
+        output_filename = f"{original_name}_resultado{ext}"
+        output_path = save_path / output_filename
+        
+        # Save file as binary (Word document)
+        with open(output_path, 'wb') as f:
+            f.write(content)
+        
+        return str(output_path), None
+    except Exception as e:
+        return None, str(e)
+
+def open_folder_in_explorer(folder_path):
+    """Open a folder in the system file explorer"""
+    import platform
+    try:
+        if platform.system() == "Windows":
+            # Windows: usar os.startfile ou explorer
+            if folder_path and os.path.exists(folder_path) and os.path.isdir(folder_path):
+                os.startfile(folder_path)
+            else:
+                # Abrir diretório atual se não houver pasta válida
+                os.startfile(".")
+        elif platform.system() == "Darwin":  # macOS
+            path_to_open = folder_path if folder_path and os.path.exists(folder_path) and os.path.isdir(folder_path) else "."
+            subprocess.Popen(["open", path_to_open])
+        else:  # Linux
+            path_to_open = folder_path if folder_path and os.path.exists(folder_path) and os.path.isdir(folder_path) else "."
+            subprocess.Popen(["xdg-open", path_to_open])
+        return True, None
+    except Exception as e:
+        return False, str(e)
 
 def create_structured_docx(title, content_dict, model_name, format_type, language, elapsed_time=None, is_batch=False):
     """Create a structured DOCX document with professional formatting"""
@@ -671,125 +790,6 @@ Todo o conteúdo deve utilizar apenas formatação legada:
             )
             
             st.divider()
-            
-            # Google Drive Integration Section
-            st.markdown("**▪ Google Drive**")
-            
-            # Initialize Google Drive Manager in session state
-            if 'gdrive_manager' not in st.session_state:
-                st.session_state['gdrive_manager'] = GoogleDriveManager()
-            
-            gdrive_manager = st.session_state['gdrive_manager']
-            
-            # Check authentication status
-            is_authenticated = gdrive_manager.is_authenticated()
-            
-            if not is_authenticated:
-                st.info("Conecte-se ao Google Drive para processar arquivos diretamente da nuvem")
-                if st.button("Conectar ao Google Drive", use_container_width=True):
-                    with st.spinner("Autenticando com Google Drive..."):
-                        try:
-                            if gdrive_manager.authenticate():
-                                st.success("✅ Conectado ao Google Drive!")
-                                st.rerun()
-                            else:
-                                st.error("❌ Falha na autenticação. Verifique se o arquivo credentials.json está presente.")
-                        except FileNotFoundError as e:
-                            st.error(f"❌ {str(e)}")
-                            st.info("Para usar o Google Drive, você precisa:\n"
-                                   "1. Criar um projeto no Google Cloud Console\n"
-                                   "2. Ativar a Google Drive API\n"
-                                   "3. Baixar credentials.json\n"
-                                   "4. Colocar o arquivo na raiz do projeto")
-            else:
-                st.success("✅ Conectado ao Google Drive")
-                
-                col1, col2 = st.columns(2)
-                with col1:
-                    if st.button("Atualizar", use_container_width=True):
-                        st.rerun()
-                with col2:
-                    if st.button("Desconectar", use_container_width=True):
-                        gdrive_manager.delete_credentials()
-                        st.session_state['gdrive_manager'] = GoogleDriveManager()
-                        st.session_state['selected_folder_id'] = None
-                        st.session_state['selected_folder_name'] = None
-                        st.success("Desconectado do Google Drive")
-                        st.rerun()
-                
-                # Folder selection
-                st.markdown("**Selecionar Pasta:**")
-                
-                # Initialize folder selection in session state
-                if 'selected_folder_id' not in st.session_state:
-                    st.session_state['selected_folder_id'] = None
-                if 'selected_folder_name' not in st.session_state:
-                    st.session_state['selected_folder_name'] = None
-                if 'current_parent_id' not in st.session_state:
-                    st.session_state['current_parent_id'] = None
-                
-                # Get folders
-                try:
-                    folders = gdrive_manager.list_folders(st.session_state['current_parent_id'])
-                    
-                    # Show current path
-                    if st.session_state['current_parent_id']:
-                        current_path = gdrive_manager.get_folder_path(st.session_state['current_parent_id'])
-                        st.caption(f"▪ {current_path}")
-                        if st.button("Voltar", use_container_width=True):
-                            # Get parent of current folder
-                            try:
-                                file = gdrive_manager.service.files().get(
-                                    fileId=st.session_state['current_parent_id'],
-                                    fields='parents'
-                                ).execute()
-                                parents = file.get('parents', [])
-                                st.session_state['current_parent_id'] = parents[0] if parents else None
-                                st.rerun()
-                            except:
-                                st.session_state['current_parent_id'] = None
-                                st.rerun()
-                    else:
-                        st.caption("▪ Meu Drive (Raiz)")
-                    
-                    if folders:
-                        # Display folders
-                        for folder in folders:
-                            col1, col2 = st.columns([3, 1])
-                            with col1:
-                                if st.button(f"▪ {folder['name']}", key=f"nav_{folder['id']}", use_container_width=True):
-                                    st.session_state['current_parent_id'] = folder['id']
-                                    st.rerun()
-                            with col2:
-                                if st.button("✓", key=f"sel_{folder['id']}", help="Selecionar esta pasta"):
-                                    st.session_state['selected_folder_id'] = folder['id']
-                                    st.session_state['selected_folder_name'] = folder['name']
-                                    st.success(f"Pasta selecionada: {folder['name']}")
-                                    st.rerun()
-                    else:
-                        st.info("Nenhuma pasta encontrada neste local")
-                    
-                    # Show selected folder
-                    if st.session_state['selected_folder_id']:
-                        st.divider()
-                        st.success(f"▪ Pasta Selecionada:\n**{st.session_state['selected_folder_name']}**")
-                        
-                        # Show files in selected folder
-                        with st.expander("▪ Arquivos na pasta", expanded=False):
-                            files = gdrive_manager.list_files_in_folder(
-                                st.session_state['selected_folder_id'],
-                                file_extensions=['.png', '.jpg', '.jpeg', '.pdf', '.tiff', '.bmp']
-                            )
-                            if files:
-                                st.write(f"**{len(files)} arquivo(s) encontrado(s):**")
-                                for file in files:
-                                    size_mb = int(file.get('size', 0)) / (1024 * 1024)
-                                    st.caption(f"• {file['name']} ({size_mb:.2f} MB)")
-                            else:
-                                st.info("Nenhum arquivo de imagem ou PDF encontrado")
-                                
-                except Exception as e:
-                    st.error(f"Erro ao listar pastas: {str(e)}")
         
         st.markdown("<style>.sidebar .sidebar-content { font-size: 8pt; }</style>", unsafe_allow_html=True)
         st.header("Resultados")
@@ -862,296 +862,435 @@ Todo o conteúdo deve utilizar apenas formatação legada:
             """, unsafe_allow_html=True)
         st.stop()
 
-    # Source selection tabs
-    source_tab1, source_tab2 = st.tabs(["📤 Upload Local", "☁️ Google Drive"])
+    # Upload container with tabs
+    st.subheader("📤 Seleção de Arquivos")
+    
+    upload_tab1, upload_tab2, upload_tab3 = st.tabs(["📎 Upload de Arquivos", "📁 Selecionar Pasta", "📄 Selecionar Arquivo"])
     
     uploaded_files = None
-    process_from_gdrive = False
+    local_folder_paths = []
+    local_file_paths = []
     
-    with source_tab1:
-        # Upload container
+    with upload_tab1:
+        # Upload de arquivos via interface web
         with st.container(border=True):
-            st.subheader("📤 Upload de Arquivos")
+            st.markdown("**Arraste seus arquivos aqui ou clique para selecionar**")
             uploaded_files = st.file_uploader(
-                "Arraste seus arquivos aqui",
+                "Selecione os arquivos",
                 type=['png', 'jpg', 'jpeg', 'tiff', 'bmp', 'pdf'],
                 accept_multiple_files=True,
-                help="Formatos suportados: PNG, JPG, JPEG, TIFF, BMP, PDF"
+                help="Formatos suportados: PNG, JPG, JPEG, TIFF, BMP, PDF",
+                label_visibility="collapsed"
             )
             
-            # Botão de processar dentro do box de upload
             if uploaded_files:
                 st.divider()
                 st.write(f"**{len(uploaded_files)} arquivo(s) carregado(s):**")
                 for uploaded_file in uploaded_files:
                     file_size = uploaded_file.size / (1024 * 1024)  # Convert to MB
                     st.write(f"✓ {uploaded_file.name} ({file_size:.2f} MB)")
-                st.divider()
-                if st.button("🚀 Processar Arquivos Locais", key="process_button_local", use_container_width=True):
-                    st.session_state['process_clicked'] = True
     
-    with source_tab2:
-        # Google Drive processing
+    with upload_tab2:
+        # Seleção de pasta do sistema de arquivos
         with st.container(border=True):
-            st.subheader("☁️ Processar do Google Drive")
+            st.markdown("**Selecione uma pasta do seu computador**")
             
-            if not gdrive_manager.is_authenticated():
-                st.warning("⚠️ Conecte-se ao Google Drive na barra lateral para usar esta opção")
-            elif not st.session_state.get('selected_folder_id'):
-                st.info("📁 Selecione uma pasta do Google Drive na barra lateral")
-            else:
-                st.success(f"📂 Pasta selecionada: **{st.session_state['selected_folder_name']}**")
-                
-                # Get files from selected folder
-                try:
-                    gdrive_files = gdrive_manager.list_files_in_folder(
-                        st.session_state['selected_folder_id'],
-                        file_extensions=['.png', '.jpg', '.jpeg', '.pdf', '.tiff', '.bmp']
-                    )
-                    
-                    if gdrive_files:
-                        st.write(f"**{len(gdrive_files)} arquivo(s) encontrado(s):**")
-                        for file in gdrive_files:
-                            size_mb = int(file.get('size', 0)) / (1024 * 1024)
-                            st.caption(f"• {file['name']} ({size_mb:.2f} MB)")
-                        
-                        st.divider()
-                        if st.button("🚀 Processar Arquivos do Google Drive", key="process_button_gdrive", use_container_width=True):
-                            st.session_state['process_clicked_gdrive'] = True
-                            process_from_gdrive = True
-                    else:
-                        st.warning("⚠️ Nenhum arquivo de imagem ou PDF encontrado na pasta selecionada")
-                        
-                except Exception as e:
-                    st.error(f"❌ Erro ao listar arquivos: {str(e)}")
-
-    if uploaded_files:
-        # Create a temporary directory for uploaded files
-        with tempfile.TemporaryDirectory() as temp_dir:
-            image_paths = []
-
-            # Save uploaded files and collect paths
-            for uploaded_file in uploaded_files:
-                # Reset file pointer before reading
-                uploaded_file.seek(0)
-                temp_path = os.path.join(temp_dir, uploaded_file.name)
-                with open(temp_path, "wb") as f:
-                    f.write(uploaded_file.read())
-                image_paths.append(temp_path)
-
-            # Process button (verifica se foi clicado via session_state)
-            if st.session_state.get('process_clicked', False):
-                # Reset flag
-                st.session_state['process_clicked'] = False
-                # Validate custom prompt
-                if prompt_type == "Manual" and not custom_prompt:
-                    st.error("⚠️ Prompt Personalizado é obrigatório. Por favor, insira um prompt antes de processar.")
-                    st.stop()
-                
-                # Show number of files being processed
-                if len(image_paths) > 1:
-                    st.info(f"📂 Processando {len(image_paths)} arquivos em modo lote...")
-                else:
-                    st.info(f"📄 Processando 1 arquivo...")
-                
-                # Reset usage stats before processing
-                try:
-                    processor.reset_usage_stats()
-                except Exception as e:
-                    st.warning(f"Aviso ao resetar estatísticas: {e}")
-                
-                # Create timer and status components
-                timer_container = st.empty()
-                status_text = st.empty()
-                
-                start_time = time.time()
-                
-                if len(image_paths) == 1:
-                    # Single image processing
-                    status_text.text("Iniciando processamento...")
-                    result = process_single_image(
-                        processor, 
-                        image_paths[0], 
-                        format_type_internal,
-                        enable_preprocessing,
-                        custom_prompt,
-                        language,
-                        status_text,
-                        timer_container
-                    )
-                    
-                    # Show final time
-                    elapsed_time = time.time() - start_time
-                    timer_container.empty()
-                    status_text.empty()
-                    
-                    # Get usage statistics
-                    try:
-                        usage_stats = processor.get_usage_stats()
-                    except Exception as e:
-                        st.warning(f"Aviso ao obter estatísticas: {e}")
-                        usage_stats = {
-                            'input_tokens': 0,
-                            'output_tokens': 0,
-                            'estimated_cost_brl': 0,
-                            'estimated_cost_usd': 0
-                        }
-                    
-                    st.success(f"✅ Processamento concluído em {elapsed_time:.2f}s!")
-                    
-                    # Display usage statistics in a separate block
-                    with st.container(border=True):
-                        st.subheader("📊 Estatísticas de Uso")
-                        st.markdown('<div style="font-size: 11pt;">', unsafe_allow_html=True)
-                        col1, col2, col3 = st.columns(3)
-                        with col1:
-                            st.metric("⏱️ Tempo", f"{elapsed_time:.2f}s")
-                        with col2:
-                            st.metric("📥 Tokens Entrada", f"{usage_stats.get('input_tokens', 0):,}")
-                        with col3:
-                            st.metric("📤 Tokens Saída", f"{usage_stats.get('output_tokens', 0):,}")
-                        # Cost metrics (hidden/commented)
-                        # with col4:
-                        #     cost_brl = usage_stats.get('estimated_cost_brl', 0)
-                        #     if cost_brl > 0:
-                        #         st.metric("💰 Custo (BRL)", f"R$ {cost_brl:.4f}")
-                        #     else:
-                        #         st.metric("💰 Custo", "Gratuito")
-                        # with col5:
-                        #     cost_usd = usage_stats.get('estimated_cost_usd', 0)
-                        #     if cost_usd > 0:
-                        #         st.metric("💵 Custo (USD)", f"${cost_usd:.4f}")
-                        #     else:
-                        #         st.metric("💵 USD", "-")
-                        st.markdown('</div>', unsafe_allow_html=True)
-                    
-                    # Get raw result
-                    try:
-                        if hasattr(processor, 'get_raw_result'):
-                            raw_result = processor.get_raw_result() or result
+            col_path, col_button = st.columns([3, 1])
+            with col_path:
+                folder_path = st.text_input(
+                    "Caminho da pasta:",
+                    placeholder="Ex: C:\\Users\\Usuario\\Documentos\\Imagens",
+                    help="Digite o caminho completo da pasta que contém os arquivos a serem processados",
+                    label_visibility="collapsed"
+                )
+            with col_button:
+                if st.button("📂 Abrir Pasta", use_container_width=True, help="Abrir explorador de arquivos para selecionar pasta"):
+                    success, error = open_folder_in_explorer(folder_path)
+                    if not success:
+                        st.error(f"Erro ao abrir explorador: {error}")
+            
+            recursive_search = st.checkbox(
+                "Buscar em subpastas (recursivo)",
+                help="Se marcado, também buscará arquivos nas subpastas"
+            )
+            
+            if folder_path:
+                if st.button("🔍 Verificar Pasta", use_container_width=True):
+                    if os.path.exists(folder_path) and os.path.isdir(folder_path):
+                        files = get_files_from_folder(folder_path, recursive=recursive_search)
+                        if files:
+                            st.success(f"✅ {len(files)} arquivo(s) encontrado(s)!")
+                            st.session_state['local_folder_files'] = files
+                            st.session_state['local_folder_path'] = folder_path
+                            st.session_state['local_folder_recursive'] = recursive_search
+                            
+                            with st.expander(f"📋 Ver arquivos encontrados ({len(files)})", expanded=False):
+                                for file_path in files[:50]:  # Mostrar até 50 arquivos
+                                    file_size = os.path.getsize(file_path) / (1024 * 1024)
+                                    st.write(f"• {os.path.basename(file_path)} ({file_size:.2f} MB)")
+                                if len(files) > 50:
+                                    st.info(f"... e mais {len(files) - 50} arquivo(s)")
                         else:
-                            raw_result = result
-                    except (AttributeError, Exception):
-                        raw_result = result
-                    
-                    # Check if result is empty or contains only error messages
-                    if not result or not result.strip() or result.startswith("Error processing image:") or len(result.strip()) < 3:
-                        st.markdown("""
-                        <div class="warning-highlight">
-                            <p><strong>⚠️ Atenção:</strong> Nenhum conteúdo foi extraído do arquivo processado.</p>
-                            <p style="margin-top: 0.5rem; font-size: 0.9rem;">O processamento pode ter falhado ou o arquivo pode não conter texto legível. Verifique o arquivo e tente novamente.</p>
-                        </div>
-                        """, unsafe_allow_html=True)
+                            st.warning("⚠️ Nenhum arquivo de imagem ou PDF encontrado nesta pasta")
+                            st.session_state['local_folder_files'] = []
                     else:
-                        # Display results in the selected format in a separate block
-                        st.subheader(f"📝 Resultado Processado ({format_type})")
-                        with st.container(border=True):
-                            st.markdown('<div style="font-size: 11pt;">', unsafe_allow_html=True)
-                            if format_type_internal == "json":
-                                try:
-                                    json_data = json.loads(result)
-                                    st.json(json_data)
-                                except:
-                                    st.code(result, language="json")
-                            elif format_type_internal == "text":
-                                st.text(result)
-                            elif format_type_internal == "doc97":
-                                st.text(result)
-                            elif format_type_internal in ["structured", "key_value", "table"]:
-                                st.markdown(result)
-                            else:  # markdown
-                                st.markdown(result)
-                            st.markdown('</div>', unsafe_allow_html=True)
-                    
-                    # Download options for single result in a separate block
-                    st.subheader("📥 Opções de Download")
-                    with st.container(border=True):
-                        st.markdown('<div style="font-size: 11pt;">', unsafe_allow_html=True)
-                        col1, col2, col3, col4, col5 = st.columns(5)
-                        
-                        with col1:
-                            st.download_button(
-                                "📥 Download TXT",
-                                result,
-                                file_name=f"ocr_result.txt",
-                                mime="text/plain",
-                                key="download_txt_single"
-                            )
-                        
-                        with col2:
-                            # Create structured DOCX
-                            doc = create_structured_docx(
-                                title='Resultado do OCR',
-                                content_dict=result,
-                                model_name=selected_model,
-                                format_type=format_type,
-                                language=language,
-                                elapsed_time=elapsed_time,
-                                is_batch=False
-                            )
-                            docx_buffer = BytesIO()
-                            doc.save(docx_buffer)
-                            docx_buffer.seek(0)
-                            st.download_button(
-                                "📥 Download DOCX",
-                                docx_buffer.getvalue(),
-                                file_name="ocr_result.docx",
-                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                                key="download_docx_single"
-                            )
-                        
-                        with col3:
-                            # DOC format with structured content
-                            doc = create_structured_docx(
-                                title='Resultado do OCR',
-                                content_dict=result,
-                                model_name=selected_model,
-                                format_type=format_type,
-                                language=language,
-                                elapsed_time=elapsed_time,
-                                is_batch=False
-                            )
-                            doc_buffer = BytesIO()
-                            doc.save(doc_buffer)
-                            doc_buffer.seek(0)
-                            st.download_button(
-                                "📥 Download DOC",
-                                doc_buffer.getvalue(),
-                                file_name="ocr_result.doc",
-                                mime="application/msword",
-                                key="download_doc_single"
-                            )
-                        
-                        with col4:
-                            # Raw result - exactly as LLM processed
-                            st.download_button(
-                                "📥 Download RAW",
-                                raw_result,
-                                file_name="ocr_result_raw.txt",
-                                mime="text/plain",
-                                help="Resultado exatamente como processado pela LLM, sem formatação",
-                                key="download_raw_single"
-                            )
-                        
-                        with col5:
-                            # Formato Minuta - Legal document format
-                            minuta_doc = create_minuta_doc(
-                                content_dict=result,
-                                is_batch=False
-                            )
-                            minuta_buffer = BytesIO()
-                            minuta_doc.save(minuta_buffer)
-                            minuta_buffer.seek(0)
-                            st.download_button(
-                                "📄 Formato Minuta",
-                                minuta_buffer.getvalue(),
-                                file_name="minuta.doc",
-                                mime="application/msword",
-                                help="Documento formatado conforme padrão de peças processuais (fonte Times New Roman 12, espaçamento 1,5, margens padrão)",
-                                key="download_minuta_single"
-                            )
-                        st.markdown('</div>', unsafe_allow_html=True)
+                        st.error("❌ Pasta não encontrada. Verifique o caminho e tente novamente.")
+            
+            # Campo para caminho de salvamento dos arquivos processados
+            st.divider()
+            st.markdown("**💾 Caminho de Salvamento dos Resultados**")
+            col_save_path, col_save_button = st.columns([3, 1])
+            with col_save_path:
+                save_path = st.text_input(
+                    "Caminho para salvar arquivos processados:",
+                    value=st.session_state.get('save_output_path', ''),
+                    placeholder="Ex: C:\\Users\\Usuario\\Documentos\\Resultados_OCR",
+                    help="Digite o caminho completo da pasta onde os arquivos processados serão salvos. Deixe vazio para não salvar automaticamente.",
+                    label_visibility="collapsed"
+                )
+                if save_path:
+                    st.session_state['save_output_path'] = save_path
                 else:
+                    st.session_state['save_output_path'] = None
+            with col_save_button:
+                if st.button("📂 Abrir Pasta", key="open_save_folder", use_container_width=True, help="Abrir explorador para selecionar pasta de salvamento"):
+                    success, error = open_folder_in_explorer(save_path if save_path else ".")
+                    if not success:
+                        st.error(f"Erro ao abrir explorador: {error}")
+            
+            if save_path:
+                if os.path.exists(save_path) and os.path.isdir(save_path):
+                    st.success(f"✅ Pasta de salvamento válida: {save_path}")
+                else:
+                    st.warning(f"⚠️ Pasta não existe. Será criada automaticamente: {save_path}")
+            
+            # Mostrar arquivos selecionados se houver
+            if 'local_folder_files' in st.session_state and st.session_state['local_folder_files']:
+                st.divider()
+                col_info, col_open = st.columns([3, 1])
+                with col_info:
+                    st.write(f"**{len(st.session_state['local_folder_files'])} arquivo(s) selecionado(s) da pasta:**")
+                    st.caption(f"📁 {st.session_state['local_folder_path']}")
+                    if st.session_state.get('local_folder_recursive'):
+                        st.caption("🔍 Busca recursiva ativada")
+                    if st.session_state.get('save_output_path'):
+                        st.caption(f"💾 Resultados serão salvos em: {st.session_state['save_output_path']}")
+                with col_open:
+                    if st.button("📂 Abrir Pasta", key="open_folder_selected", use_container_width=True, help="Abrir esta pasta no explorador"):
+                        success, error = open_folder_in_explorer(st.session_state['local_folder_path'])
+                        if not success:
+                            st.error(f"Erro ao abrir pasta: {error}")
+    
+    with upload_tab3:
+        # Seleção de arquivo específico do sistema de arquivos
+        with st.container(border=True):
+            st.markdown("**Selecione um arquivo específico do seu computador**")
+            file_path = st.text_input(
+                "Caminho do arquivo:",
+                placeholder="Ex: C:\\Users\\Usuario\\Documentos\\imagem.png",
+                help="Digite o caminho completo do arquivo a ser processado"
+            )
+            
+            if file_path:
+                if st.button("🔍 Verificar Arquivo", use_container_width=True):
+                    is_valid, message = validate_file_path(file_path)
+                    if is_valid:
+                        file_size = os.path.getsize(file_path) / (1024 * 1024)
+                        st.success(f"✅ Arquivo válido!")
+                        st.write(f"**Arquivo:** {os.path.basename(file_path)}")
+                        st.write(f"**Tamanho:** {file_size:.2f} MB")
+                        st.session_state['local_file_path'] = file_path
+                    else:
+                        st.error(f"❌ {message}")
+                        st.session_state['local_file_path'] = None
+            
+            # Mostrar arquivo selecionado se houver
+            if 'local_file_path' in st.session_state and st.session_state['local_file_path']:
+                st.divider()
+                file_path = st.session_state['local_file_path']
+                file_size = os.path.getsize(file_path) / (1024 * 1024)
+                st.write(f"**Arquivo selecionado:**")
+                st.write(f"✓ {os.path.basename(file_path)} ({file_size:.2f} MB)")
+                st.caption(f"📄 {file_path}")
+
+    # Determinar quais arquivos processar
+    files_to_process = []
+    source_type = None
+    
+    if uploaded_files:
+        # Arquivos via upload web
+        source_type = "upload"
+        files_to_process = uploaded_files
+    elif 'local_folder_files' in st.session_state and st.session_state['local_folder_files']:
+        # Arquivos de pasta local
+        source_type = "folder"
+        files_to_process = st.session_state['local_folder_files']
+    elif 'local_file_path' in st.session_state and st.session_state['local_file_path']:
+        # Arquivo específico local
+        source_type = "file"
+        files_to_process = [st.session_state['local_file_path']]
+    
+    # Botão de processar
+    if files_to_process:
+        st.divider()
+        col1, col2 = st.columns([2, 1])
+        with col1:
+            if source_type == "upload":
+                st.info(f"📎 {len(files_to_process)} arquivo(s) pronto(s) para processamento (Upload)")
+            elif source_type == "folder":
+                st.info(f"📁 {len(files_to_process)} arquivo(s) pronto(s) para processamento (Pasta: {os.path.basename(st.session_state.get('local_folder_path', ''))})")
+            elif source_type == "file":
+                st.info(f"📄 1 arquivo pronto para processamento")
+        with col2:
+            if st.button("🚀 Processar Arquivos", key="process_button_local", use_container_width=True):
+                st.session_state['process_clicked'] = True
+                st.session_state['source_type'] = source_type
+
+    if st.session_state.get('process_clicked', False) and files_to_process:
+        source_type = st.session_state.get('source_type', 'upload')
+        
+        # Process button (verifica se foi clicado via session_state)
+        if st.session_state.get('process_clicked', False):
+            # Reset flag
+            st.session_state['process_clicked'] = False
+            
+            # Validate custom prompt
+            if prompt_type == "Manual" and not custom_prompt:
+                st.error("⚠️ Prompt Personalizado é obrigatório. Por favor, insira um prompt antes de processar.")
+                st.stop()
+            
+            # Get save output path from session state
+            save_output_path = st.session_state.get('save_output_path', None)
+            
+            # Prepare file paths based on source type
+            if source_type == "upload":
+                # Uploaded files - need to save to temp directory
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    image_paths = []
+                    for uploaded_file in uploaded_files:
+                        # Reset file pointer before reading
+                        uploaded_file.seek(0)
+                        temp_path = os.path.join(temp_dir, uploaded_file.name)
+                        with open(temp_path, "wb") as f:
+                            f.write(uploaded_file.read())
+                        image_paths.append(temp_path)
+                    
+                    # Process files
+                    _process_files(image_paths, processor, format_type_internal, enable_preprocessing, 
+                                 custom_prompt, language, selected_model, format_type, save_output_path)
+                    
+            elif source_type == "folder" or source_type == "file":
+                # Files from local folder or single file - paths are already absolute
+                image_paths = files_to_process.copy()
+                _process_files(image_paths, processor, format_type_internal, enable_preprocessing, 
+                             custom_prompt, language, selected_model, format_type, save_output_path)
+
+def _process_files(image_paths, processor, format_type_internal, enable_preprocessing, 
+                  custom_prompt, language, selected_model, format_type, save_output_path=None):
+    """Process files (single or batch)"""
+    # Show number of files being processed
+    if len(image_paths) > 1:
+        st.info(f"📂 Processando {len(image_paths)} arquivos em modo lote...")
+    else:
+        st.info(f"📄 Processando 1 arquivo...")
+    
+    # Reset usage stats before processing
+    try:
+        processor.reset_usage_stats()
+    except Exception as e:
+        st.warning(f"Aviso ao resetar estatísticas: {e}")
+    
+    # Create timer and status components
+    timer_container = st.empty()
+    status_text = st.empty()
+    
+    start_time = time.time()
+    
+    if len(image_paths) == 1:
+        # Single image processing
+        status_text.text("Iniciando processamento...")
+        result = process_single_image(
+            processor, 
+            image_paths[0], 
+            format_type_internal,
+            enable_preprocessing,
+            custom_prompt,
+            language,
+            status_text,
+            timer_container
+        )
+        
+        # Show final time
+        elapsed_time = time.time() - start_time
+        timer_container.empty()
+        status_text.empty()
+        
+        # Get usage statistics
+        try:
+            usage_stats = processor.get_usage_stats()
+        except Exception as e:
+            st.warning(f"Aviso ao obter estatísticas: {e}")
+            usage_stats = {
+                'input_tokens': 0,
+                'output_tokens': 0,
+                'estimated_cost_brl': 0,
+                'estimated_cost_usd': 0
+            }
+        
+        st.success(f"✅ Processamento concluído em {elapsed_time:.2f}s!")
+        
+        # Save file automatically if save path is specified
+        if save_output_path:
+            if result and result.strip() and not result.startswith("Error processing image:") and len(result.strip()) >= 3:
+                saved_path, error = save_processed_file(
+                    image_paths[0], result, save_output_path, format_type_internal,
+                    selected_model, format_type, language, elapsed_time, is_batch=False
+                )
+                if saved_path:
+                    st.success(f"💾 Arquivo salvo automaticamente: {saved_path}")
+                elif error:
+                    st.warning(f"⚠️ Erro ao salvar arquivo: {error}")
+        
+        # Display usage statistics in a separate block
+        with st.container(border=True):
+            st.subheader("📊 Estatísticas de Uso")
+            st.markdown('<div style="font-size: 11pt;">', unsafe_allow_html=True)
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("⏱️ Tempo", f"{elapsed_time:.2f}s")
+            with col2:
+                st.metric("📥 Tokens Entrada", f"{usage_stats.get('input_tokens', 0):,}")
+            with col3:
+                st.metric("📤 Tokens Saída", f"{usage_stats.get('output_tokens', 0):,}")
+            st.markdown('</div>', unsafe_allow_html=True)
+        
+        # Get raw result
+        try:
+            if hasattr(processor, 'get_raw_result'):
+                raw_result = processor.get_raw_result() or result
+            else:
+                raw_result = result
+        except (AttributeError, Exception):
+            raw_result = result
+        
+        # Check if result is empty or contains only error messages
+        if not result or not result.strip() or result.startswith("Error processing image:") or len(result.strip()) < 3:
+            st.markdown("""
+            <div class="warning-highlight">
+                <p><strong>⚠️ Atenção:</strong> Nenhum conteúdo foi extraído do arquivo processado.</p>
+                <p style="margin-top: 0.5rem; font-size: 0.9rem;">O processamento pode ter falhado ou o arquivo pode não conter texto legível. Verifique o arquivo e tente novamente.</p>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            # Display results in the selected format in a separate block
+            st.subheader(f"📝 Resultado Processado ({format_type})")
+            with st.container(border=True):
+                st.markdown('<div style="font-size: 11pt;">', unsafe_allow_html=True)
+                if format_type_internal == "json":
+                    try:
+                        json_data = json.loads(result)
+                        st.json(json_data)
+                    except:
+                        st.code(result, language="json")
+                elif format_type_internal == "text":
+                    st.text(result)
+                elif format_type_internal == "doc97":
+                    st.text(result)
+                elif format_type_internal in ["structured", "key_value", "table"]:
+                    st.markdown(result)
+                else:  # markdown
+                    st.markdown(result)
+                st.markdown('</div>', unsafe_allow_html=True)
+        
+            # Download options for single result in a separate block
+            st.subheader("📥 Opções de Download")
+            with st.container(border=True):
+                st.markdown('<div style="font-size: 11pt;">', unsafe_allow_html=True)
+                col1, col2, col3, col4, col5 = st.columns(5)
+                
+                with col1:
+                    st.download_button(
+                        "📥 Download TXT",
+                        result,
+                        file_name=f"ocr_result.txt",
+                        mime="text/plain",
+                        key="download_txt_single"
+                    )
+                
+                with col2:
+                    # Create structured DOCX
+                    doc = create_structured_docx(
+                        title='Resultado do OCR',
+                        content_dict=result,
+                        model_name=selected_model,
+                        format_type=format_type,
+                        language=language,
+                        elapsed_time=elapsed_time,
+                        is_batch=False
+                    )
+                    docx_buffer = BytesIO()
+                    doc.save(docx_buffer)
+                    docx_buffer.seek(0)
+                    st.download_button(
+                        "📥 Download DOCX",
+                        docx_buffer.getvalue(),
+                        file_name="ocr_result.docx",
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        key="download_docx_single"
+                    )
+                
+                with col3:
+                    # DOC format with structured content
+                    doc = create_structured_docx(
+                        title='Resultado do OCR',
+                        content_dict=result,
+                        model_name=selected_model,
+                        format_type=format_type,
+                        language=language,
+                        elapsed_time=elapsed_time,
+                        is_batch=False
+                    )
+                    doc_buffer = BytesIO()
+                    doc.save(doc_buffer)
+                    doc_buffer.seek(0)
+                    st.download_button(
+                        "📥 Download DOC",
+                        doc_buffer.getvalue(),
+                        file_name="ocr_result.doc",
+                        mime="application/msword",
+                        key="download_doc_single"
+                    )
+                
+                with col4:
+                    # Raw result - exactly as LLM processed
+                    st.download_button(
+                        "📥 Download RAW",
+                        raw_result,
+                        file_name="ocr_result_raw.txt",
+                        mime="text/plain",
+                        help="Resultado exatamente como processado pela LLM, sem formatação",
+                        key="download_raw_single"
+                    )
+                
+                with col5:
+                    # Formato Minuta - Legal document format
+                    minuta_doc = create_minuta_doc(
+                        content_dict=result,
+                        is_batch=False
+                    )
+                    minuta_buffer = BytesIO()
+                    minuta_doc.save(minuta_buffer)
+                    minuta_buffer.seek(0)
+                    st.download_button(
+                        "📄 Formato Minuta",
+                        minuta_buffer.getvalue(),
+                        file_name="minuta.doc",
+                        mime="application/msword",
+                        help="Documento formatado conforme padrão de peças processuais (fonte Times New Roman 12, espaçamento 1,5, margens padrão)",
+                        key="download_minuta_single"
+                    )
+                st.markdown('</div>', unsafe_allow_html=True)
+    else:
                     # Batch processing
                     status_text.text("Iniciando processamento em lote...")
                     try:
@@ -1188,6 +1327,34 @@ Todo o conteúdo deve utilizar apenas formatação legada:
                         }
                     
                     st.success(f"✅ Processamento em lote concluído em {elapsed_time:.2f}s!")
+                    
+                    # Save files automatically if save path is specified
+                    if save_output_path and results.get('results'):
+                        saved_count = 0
+                        save_errors = []
+                        save_status = st.empty()
+                        
+                        valid_results = {fp: text for fp, text in results['results'].items() 
+                                       if text and text.strip() and not text.startswith("Error processing image:")}
+                        
+                        for file_path, result_text in valid_results.items():
+                            saved_path, error = save_processed_file(
+                                file_path, result_text, save_output_path, format_type_internal,
+                                selected_model, format_type, language, elapsed_time, is_batch=True
+                            )
+                            if saved_path:
+                                saved_count += 1
+                            elif error:
+                                save_errors.append(f"{os.path.basename(file_path)}: {error}")
+                        
+                        if saved_count > 0:
+                            st.success(f"💾 {saved_count} arquivo(s) salvo(s) automaticamente em: {save_output_path}")
+                        if save_errors:
+                            st.warning(f"⚠️ Erros ao salvar {len(save_errors)} arquivo(s):")
+                            for error_msg in save_errors[:5]:  # Mostrar até 5 erros
+                                st.caption(f"• {error_msg}")
+                            if len(save_errors) > 5:
+                                st.caption(f"... e mais {len(save_errors) - 5} erro(s)")
                     
                     # Display processing and usage statistics side by side
                     col_stat1, col_stat2 = st.columns(2)
@@ -1418,256 +1585,6 @@ Todo o conteúdo deve utilizar apenas formatação legada:
                             </div>
                             """, unsafe_allow_html=True)
                         st.markdown('</div>', unsafe_allow_html=True)
-    
-    # Google Drive Processing Section
-    if st.session_state.get('process_clicked_gdrive', False) and gdrive_manager.is_authenticated() and st.session_state.get('selected_folder_id'):
-        # Reset flag
-        st.session_state['process_clicked_gdrive'] = False
-        
-        # Validate custom prompt
-        if prompt_type == "Manual" and not custom_prompt:
-            st.error("⚠️ Prompt Personalizado é obrigatório. Por favor, insira um prompt antes de processar.")
-            st.stop()
-        
-        try:
-            # Get files from Google Drive
-            gdrive_files = gdrive_manager.list_files_in_folder(
-                st.session_state['selected_folder_id'],
-                file_extensions=['.png', '.jpg', '.jpeg', '.pdf', '.tiff', '.bmp']
-            )
-            
-            if not gdrive_files:
-                st.warning("⚠️ Nenhum arquivo encontrado na pasta selecionada")
-                st.stop()
-            
-            st.info(f"📂 Processando {len(gdrive_files)} arquivo(s) do Google Drive...")
-            
-            # Create temporary directory for downloaded files
-            with tempfile.TemporaryDirectory() as temp_dir:
-                # Download files from Google Drive
-                image_paths = []
-                download_progress = st.progress(0)
-                download_status = st.empty()
-                
-                for idx, file in enumerate(gdrive_files):
-                    download_status.text(f"📥 Baixando {file['name']}... ({idx + 1}/{len(gdrive_files)})")
-                    temp_path = os.path.join(temp_dir, file['name'])
-                    
-                    if gdrive_manager.download_file(file['id'], temp_path):
-                        image_paths.append(temp_path)
-                    else:
-                        st.warning(f"⚠️ Falha ao baixar: {file['name']}")
-                    
-                    download_progress.progress((idx + 1) / len(gdrive_files))
-                
-                download_progress.empty()
-                download_status.empty()
-                
-                if not image_paths:
-                    st.error("❌ Nenhum arquivo foi baixado com sucesso")
-                    st.stop()
-                
-                st.success(f"✅ {len(image_paths)} arquivo(s) baixado(s) com sucesso!")
-                
-                # Reset usage stats before processing
-                try:
-                    processor.reset_usage_stats()
-                except Exception as e:
-                    st.warning(f"Aviso ao resetar estatísticas: {e}")
-                
-                # Create timer and status components
-                timer_container = st.empty()
-                status_text = st.empty()
-                
-                start_time = time.time()
-                
-                # Process files
-                status_text.text("Iniciando processamento...")
-                results = process_batch_images(
-                    processor,
-                    image_paths,
-                    format_type_internal,
-                    enable_preprocessing,
-                    custom_prompt,
-                    language,
-                    status_text,
-                    timer_container
-                )
-                
-                # Show final time
-                elapsed_time = time.time() - start_time
-                timer_container.empty()
-                status_text.empty()
-                
-                # Get usage statistics
-                try:
-                    usage_stats = processor.get_usage_stats()
-                except Exception as e:
-                    st.warning(f"Aviso ao obter estatísticas: {e}")
-                    usage_stats = {
-                        'input_tokens': 0,
-                        'output_tokens': 0,
-                        'estimated_cost_brl': 0,
-                        'estimated_cost_usd': 0
-                    }
-                
-                st.success(f"✅ Processamento concluído em {elapsed_time:.2f}s!")
-                
-                # Display statistics
-                col_stat1, col_stat2 = st.columns(2)
-                
-                with col_stat1:
-                    with st.container(border=True):
-                        st.subheader("📊 Estatísticas de Processamento")
-                        st.markdown('<div style="font-size: 11pt;">', unsafe_allow_html=True)
-                        col1, col2, col3 = st.columns(3)
-                        with col1:
-                            st.metric("Total de Imagens", results.get('statistics', {}).get('total', 0))
-                        with col2:
-                            st.metric("Sucesso", results.get('statistics', {}).get('successful', 0))
-                        with col3:
-                            st.metric("Falhas", results.get('statistics', {}).get('failed', 0))
-                        st.markdown('</div>', unsafe_allow_html=True)
-                
-                with col_stat2:
-                    with st.container(border=True):
-                        st.subheader("💡 Estatísticas de Uso")
-                        st.markdown('<div style="font-size: 11pt;">', unsafe_allow_html=True)
-                        col1, col2, col3 = st.columns(3)
-                        with col1:
-                            st.metric("⏱️ Tempo Total", f"{elapsed_time:.2f}s")
-                        with col2:
-                            st.metric("📥 Tokens Entrada", f"{usage_stats.get('input_tokens', 0):,}")
-                        with col3:
-                            st.metric("📤 Tokens Saída", f"{usage_stats.get('output_tokens', 0):,}")
-                        st.markdown('</div>', unsafe_allow_html=True)
-                
-                # Display errors if any
-                if results.get('errors'):
-                    st.markdown("""
-                    <div class="warning-highlight">
-                        <p><strong>⚠️ Atenção:</strong> Alguns arquivos apresentaram erros durante o processamento:</p>
-                    </div>
-                    """, unsafe_allow_html=True)
-                    for file_path, error in results['errors'].items():
-                        st.markdown(f"""
-                        <div class="warning-highlight" style="margin-top: 0.5rem;">
-                            <p><strong>❌ {os.path.basename(file_path)}:</strong> {error}</p>
-                        </div>
-                        """, unsafe_allow_html=True)
-                
-                # Display results
-                if results.get('results'):
-                    valid_results = {fp: text for fp, text in results['results'].items() 
-                                   if text and text.strip() and not text.startswith("Error processing image:")}
-                    
-                    if valid_results:
-                        st.subheader(f"📝 Resultados Processados ({format_type})")
-                        for file_path, text in valid_results.items():
-                            with st.expander(f"✅ {os.path.basename(file_path)}", expanded=True):
-                                with st.container(border=True):
-                                    st.markdown('<div style="font-size: 11pt;">', unsafe_allow_html=True)
-                                    if format_type_internal == "json":
-                                        try:
-                                            json_data = json.loads(text)
-                                            st.json(json_data)
-                                        except:
-                                            st.code(text, language="json")
-                                    elif format_type_internal == "text":
-                                        st.text(text)
-                                    elif format_type_internal == "doc97":
-                                        st.text(text)
-                                    elif format_type_internal in ["structured", "key_value", "table"]:
-                                        st.markdown(text)
-                                    else:  # markdown
-                                        st.markdown(text)
-                                    st.markdown('</div>', unsafe_allow_html=True)
-                        
-                        # Upload results back to Google Drive
-                        st.subheader("☁️ Salvando Resultados no Google Drive")
-                        upload_progress = st.progress(0)
-                        upload_status = st.empty()
-                        
-                        uploaded_count = 0
-                        total_to_upload = len(valid_results)
-                        
-                        # Create temporary files for each result and upload
-                        for idx, (file_path, text) in enumerate(valid_results.items()):
-                            original_name = os.path.basename(file_path)
-                            base_name = os.path.splitext(original_name)[0]
-                            
-                            # Determine file extension based on format
-                            if format_type_internal == "json":
-                                ext = ".json"
-                                content = text
-                            elif format_type_internal in ["doc97"]:
-                                ext = ".doc"
-                                # Create DOC file
-                                doc = create_structured_docx(
-                                    title=f'Resultado OCR - {original_name}',
-                                    content_dict=text,
-                                    model_name=selected_model,
-                                    format_type=format_type,
-                                    language=language,
-                                    is_batch=False
-                                )
-                                doc_buffer = BytesIO()
-                                doc.save(doc_buffer)
-                                content = doc_buffer.getvalue()
-                            else:
-                                ext = ".txt"
-                                content = text
-                            
-                            result_filename = f"{base_name}_resultado{ext}"
-                            
-                            # Save to temporary file
-                            temp_result_path = os.path.join(temp_dir, result_filename)
-                            
-                            if isinstance(content, bytes):
-                                with open(temp_result_path, 'wb') as f:
-                                    f.write(content)
-                            else:
-                                with open(temp_result_path, 'w', encoding='utf-8') as f:
-                                    f.write(content)
-                            
-                            # Upload to Google Drive
-                            upload_status.text(f"📤 Enviando {result_filename}... ({idx + 1}/{total_to_upload})")
-                            
-                            file_id = gdrive_manager.upload_file(
-                                temp_result_path,
-                                st.session_state['selected_folder_id'],
-                                result_filename
-                            )
-                            
-                            if file_id:
-                                uploaded_count += 1
-                            else:
-                                st.warning(f"⚠️ Falha ao enviar: {result_filename}")
-                            
-                            upload_progress.progress((idx + 1) / total_to_upload)
-                        
-                        upload_progress.empty()
-                        upload_status.empty()
-                        
-                        st.success(f"✅ {uploaded_count} arquivo(s) enviado(s) para o Google Drive!")
-                        st.info(f"📂 Os resultados foram salvos na pasta: **{st.session_state['selected_folder_name']}**")
-                    else:
-                        st.markdown("""
-                        <div class="warning-highlight">
-                            <p><strong>⚠️ Atenção:</strong> Nenhum conteúdo válido foi extraído dos arquivos processados.</p>
-                        </div>
-                        """, unsafe_allow_html=True)
-                else:
-                    st.markdown("""
-                    <div class="warning-highlight">
-                        <p><strong>⚠️ Atenção:</strong> Nenhum resultado foi gerado durante o processamento.</p>
-                    </div>
-                    """, unsafe_allow_html=True)
-                    
-        except Exception as e:
-            st.error(f"❌ Erro no processamento do Google Drive: {str(e)}")
-            import traceback
-            st.code(traceback.format_exc())
 
 if __name__ == "__main__":
     main()
